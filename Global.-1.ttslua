@@ -1,17 +1,39 @@
 --[[ Lua code. See documentation: http://berserk-games.com/knowledgebase/scripting/ --]]
 
+local _currentPhase = "SETUP" --"SETUP|DRAFT|STRATEGY|ACTION|AGENDA"
+local _phases = {
+  ["SETUP"] = 0, ["DRAFT"] = 1, ["STRATEGY"] = 2, ["ACTION"] = 3, ["AGENDA"] = 1,--phaseName to nextPhase index
+  [-1] = "SETUP", [0] = "DRAFT", [1] = "STRATEGY", [2] = "ACTION", [3] = "AGENDA", --phase order
+}
+
+function getPhase()
+  return _currentPhase
+end
+
+-- leave phase nil to progress to the next phase or set phase directly
+function setPhase(phase)
+  assert(phase == nil or (type(phase) == "string" and _phases[phase]))
+  target = phase or _phases[_phases[_currentPhase]] --directSet or get next
+  local prevPhase = _currentPhase
+  --notify interested parties
+  Events.invoke({event = "phaseEnd", params = {phase = prevPhase, next = target}})
+  _currentPhase = target
+  Events.invoke({event = "phaseStart", params = {phase = target, prev = prevPhase}})
+end
+
 --[[New getHelperClient - copy/paste into your scripts
 function getHelperClient(helperObjectName)
   --the call will error out if no object is found
   local helperObject = Global.call('getHelper', helperObjectName)
   local function getCallWrapper(functionName)
+      helperObject = helperObject == nil and Global.call('getHelper', helperObjectName) or helperObject
       if not helperObject.getVar(functionName) then error('missing ' .. helperObjectName .. '.' .. functionName) end
       return function(parameters) return helperObject.call(functionName, parameters) end
   end
   return setmetatable({}, { __index = function(t, k) return getCallWrapper(k) end })
 end
 
-local _deckHelper = getHelperClient('TI4_DECK_HELPER')
+local _eampleHelper = getHelperClient('TI4_EXAMPLE_HELPER')
 --]]
 
 local _helpersInit = false
@@ -96,13 +118,6 @@ end
 
 --For the helpers used in this scrit
 local function getHelperClient(helperName)
-   --[[if not _helperObjects[helperName] then
-     _helperObjects[helperName] = _getHelperObject(helperName)
-     if not _helperObjects[helperName] then
-       print("Could not find " .. helperName)
-       return
-     end
-   end--]]
     -- Nested tables are considered cross script.  Make a local copy.
     local function copyTable(t)
         if t and type(t) == 'table' then
@@ -116,6 +131,8 @@ local function getHelperClient(helperName)
     end
     local helperObject = getHelper(helperName)
     local function getCallWrapper(functionName)
+        --deleted items have to be explicitly be checked against nil
+        helperObject = helperObject == nil and getHelper(helperName) or helperObject
         if not helperObject.getVar(functionName) then error('missing ' .. helperName .. '.' .. functionName) end
         return function(parameters) return copyTable(helperObject.call(functionName, parameters)) end
     end

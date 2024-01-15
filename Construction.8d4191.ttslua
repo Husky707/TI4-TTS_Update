@@ -1,7 +1,7 @@
 function getHelperClient(helperObjectName)
     local helperObject = Global.call('getHelper', helperObjectName)
     local function getCallWrapper(functionName)
-        helperObject = helperObject or getHelperObject()
+        helperObject = helperObject == nil and Global.call('getHelper', helperObjectName) or helperObject
         return function(parameters) return helperObject.call(functionName, parameters) end
     end
     return setmetatable({}, { __index = function(t, k) return getCallWrapper(k) end })

@@ -1,39 +1,41 @@
-local showDebug = false
 --------------------
 --[[Copy/paste common use case:
-local events = getHelperClient("TI4_EVENTS")
+local Events = getHelperClient("TI4_EVENT_HELPER")
 
 function onLoad(save_state)
-  events.addListener({eventName = "exampleEvent", objGUID = self.getGUID()})
+  Events.addListener({eventName = "exampleEvent", objGUID = self.getGUID()})
 end
 
 --your callback function cannot have the 'local' scope
 function onExampleEvent(params)
-  print("Got evnet notification!")
-  --run your code
+  print("Got event notification!")
+  print("The ", params.color, " player pinged the table!")
+  --run your logic
 end
 
---exampleEvent isn't called by other functions
---drop this object to invoke the event
-function onDrop(player_color)
-  events.invoke({eventName = "exampleEvent"})
+--Ping the table to invoke the event
+function onPlayerPing(player, position)
+  Events.invoke({event = "exampleEvent", params = {position = position, color = player.color} })
 end
-
 --]]
 ------------------------------------------------------------------------------------------------------------------------
+
 --List of built in game events and where they are Called
 --You can create your own events using createEvent(params). See below for details
 local events =
 {
-  ["exampleEvent"] =
-  {
-    listeners = {}, --{ [guid] = { listenObject = obj, callback = string name of function }, }
-    defaultCallback = "onExampleEvent"
-  }
+  ["phaseStart"] =
+  { --params = {prev = "", phase = "SETUP|DRAFT|STRATEGY|ACTION|AGENDA"}
+    defaultCallback = "onPhaseStart",
+  },
+  ["phaseEnd"] =
+  { --params = {next = "", phase = "SETUP|DRAFT|STRATEGY|ACTION|AGENDA"}
+    defaultCallback = "onPhaseEnd",
+  },
 }
 
 ------------------------------------------------------------------------------------------------------------------------
---Public methods: addListener, removeListener, invoke, newEvent
+--Public functions: addListener, removeListener, invoke, createEvent
 --Interact with the event system here
 
 --[[params:
@@ -44,13 +46,13 @@ local events =
 function addListener(params)
   assert(params.eventName and type(params.eventName) == 'string')
   assert(params.objGUID and type(params.objGUID) == 'string')
-  if params.callback then assert(type(params.callback) == 'string', "Callback should be the string name of your callback function. Ommitting defaults to onEventName.") end
+  assert(params.callback == nil or type(params.callback) == 'string', "Callback should be the string name of your callback function. Ommitting defaults to onEventName.")
 
   local event = events[params.eventName]
   local guid = params.objGUID
   local obj = getObjectFromGUID(guid)
   assert(event, params.eventName .. " is not a registered event.")
-  assert(obj, "To listen to an event, you must provide the valid guid of the listening object")
+  assert(obj, "To listen to an event, you must provide the valid guid of an existing listening object")
 
   local currentListeners = event.listeners or {}
   if currentListeners[guid] then return false end--prevent listener douplication
@@ -59,7 +61,7 @@ function addListener(params)
   currentListeners[guid] = { listenObject = obj, callback = cb }
   event.listeners = currentListeners
 
-  if showDebug then print(obj.getName() .. " is now listening to " .. params.eventName) end
+  --print(obj.getName() .. " is listening to " .. params.eventName)
   return true
 end
 
@@ -72,19 +74,34 @@ function removeListener(params)
   events[params.eventName].listeners[params.objGUID] = nil
 end
 
---params: {eventName, eventParams}
+--params: {event = "", params = {}}
 function invoke(params)
-  assert(params.eventName and type(params.eventName) == 'string')
-  assert(events[params.eventName], "Tried to invoke an event that does not exist.")
-  local listeners = events[params.eventName].listeners
+  assert(params.event and type(params.event) == 'string')
+  assert(events[params.event], "Field to invoke: Event >"..params.event.."<  does not exist.")
+  local listeners = events[params.event].listeners or {}
   if not next(listeners) then return end
 
   --call events. Mark nil objects for removal
-  if showDebug then print("Invoking " .. params.eventName .. ".") end
+  --print("Invoking " .. params.event .. ".")
+  function tryCall(callData)
+    local function try()
+      assert(callData and type(callData) == "table")
+      assert(callData.listenObject ~= nil and type(callData.listenObject) == "userdata")
+      assert(callData.callback and type(callData.callback) == "string" and callData.listenObject.getVar(callData.callback), 'missing ' .. callData.listenObject.getName() .. '.' .. callData.callback)
+
+      return callData.listenObject.call(callData.callback, params.params)
+    end
+    local success, result = pcall(try)
+    if not success then
+      --print("Failed callback: callData incorrectly formated. ", result)
+      return
+    end
+    return result
+  end
   local nilObjs = {}
   for id,each in pairs(listeners) do
-    if each.listenObject then
-      each.listenObject.call(each.callback, params.eventParams)
+    if each.listenObject ~= nil then
+      tryCall(each)
     else
       table.insert(nilObjs, id)
     end
@@ -109,9 +126,9 @@ function createEvent(params)
     print(params.eventName .. " already exists. Choose a unique name.")
     return false
   end
-  --print("Callbackname: >" .. callback .."<")
+
+  --print("Event created: " .. params.eventName  .. " calls>" .. callback .."<")
   events[params.eventName] = { listeners = {}, defaultCallback = callback}
-  if showDebug then print("Event created: " .. params.eventName  .. " calls>" .. callback .."<") end
   return true
 end
 
@@ -129,9 +146,7 @@ function onLoad(saveState)
             table.insert(invisibleTo, color)
         end
     end
-    if not showDebug then
     self.setInvisibleTo(invisibleTo)
-  end
 end
 -------------------------------------------------------------------------------
 -- @author Darrell
