@@ -12,34 +12,39 @@ end
 local _factionHelper = getHelperClient('TI4_FACTION_HELPER')
 local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
 
-local _activeEffects = {}
-local _toggleCards = {} --indexed by object names{[name] = true}
+local _activeEffects = {} --{[perContext] = {[perColor] = {[activeEffects]}}} --updated when called, up to once per frame unless forced
+local _toggleCards = {["Emissary Taivra"] = true} --indexed by object names{[name] = true}
 local _toggleUpdate = false
 
 -- abilities are what enable players to use gameEffects. Abilities are used within a CONTEXT
-local CONTEXT = {
-  "any", "unitAbilities", "commodities", "adjacency", "draw_actionCard", "draw_..."
+local CONTEXT = { --converted to table indexed by value during load: ["context"] = true
+  "test", "unitAbilities", "commodities", "adjacency", "draw_actionCard", "draw_..."
 }
 local _gameEffects = {
-  ["ion storm"] = {
-    id = "ion strom",
-    sources = {
-      {id = "Ion Storm Token", context = "adjacency", targetType = "ALL", refs = {OBJECTS = {"Ion Storm Token"}}},
-    }
-  },
-  ["link all wormholes"] = {
-    id = "link all wormholes",
-    sources = {
-      { id = "Emissary Taivra",
-        targetType = "ALL",
-        context = "adjacency",
-        refs = { OBJECTS = {{name = "Emissary Taivra", requireFaceup = true, requireActive = "true"}}}
-      }
-    },
-  },
 }
 
---[[params: {
+--Public Getters----------------------------------------------------------------
+
+--params: {context, ability = "abilityName(Should match the effects id)", color*optional(if nil, checks if ability is acitve for ANY color)}
+--returns: false or # of times ability should be applied (treat # as boolean if testing if ability is targeting ANY color)
+function isAbilityActive(params)
+  assert(params and type(params) == "table")
+  assert(params.ability and type(params.ability) == "string","Ability should be a string matching the id of a registered gameEffect")
+  assert(params.context, "Failed to provide a context to test ability >"..params.ability .."<")
+  assert(CONTEXT[params.context], "Invalid context >"..params.context.."< Check for typos")
+
+  getActiveAbilities({context = params.context})
+  local testCols = params.color and {params.color} or _zoneHelper.getZones()
+  local _effects = _activeEffects[params.context] or false
+  for _,eachCol in ipairs(testCols) do
+    local result = _effects and _effects[eachCol] and _effects[eachCol][params.ability] and _effects[eachCol][params.ability].count or false
+    if result then return result end
+  end
+
+  return false
+end
+
+--[[params: { context, color }
       context = "contextName", --required. What type of abilities are you looking for
       color = "color" *optional, gets abilities for this color or for all colors if nil
       forceUpdate = bool*optional --active abilities are only updated once per frame if called. Force update to refresh it again this frame
@@ -50,7 +55,7 @@ local _gameEffects = {
     sources = { --groups the individual sources found by source id
       [sourceID] = {
         count,
-        refs = {["ObjOrAbilityName"] = {count, objs}
+        refs = {["ObjOrAbilityName"] = {count, objs = {table of object references for any of the active source objects found with this name}}
       }}
     },
   }
@@ -69,27 +74,36 @@ function getActiveAbilities(params)
   return not params.color and _activeEffects[params.context] or _activeEffects[params.context][params.color] or {}
 end
 
---[[params: "string" or {name = ""}, --card objects with this name will become toggleable--]]
+--params = objRef or {obj = objRef}
+function isToggleActiveCardActive(params)
+  assert(params ~= nil)
+  local obj = assert(type(params) == "userdata" and params or params.obj or false)
+  return _isToggleActiveCard(obj) and _isToggleActiveCardActive(obj)
+end
+
+--Injection---------------------------------------------------------------------
+
+--[[params: "string" or {""}, --card objects with this name will become toggleable--]]
 --Alliance cards should not be registerd, they are detected automatically if a commander is registered
 function registerToggleCard(params)
-  local name = type(params) == "string" and params or params.name
-  _toggleCards[params.name] = true
+  local name = assert(type(params) == "string" and params or type(params) == "table" and params[1] or false)
+  _toggleCards[name] = true
 
   if _toggleUpdate then return end
   _toggleUpdate = true
   Wait.frames(function() _toggleUpdate = false _applyToggleActiveCards() end, 3)
 end
 
---params = objRef or {obj = objRef}
-function isToggleActiveCardActive(params)
-  assert(params ~= nil)
-  local obj = type(params) == "userdata" and params or params.obj
-  return _isToggleActiveCardActive(obj)
-end
+--[[Shoud I inject or register?
+  Abilities (referd to as _gameEffects in this script) may have multiple sources;
+  each source is a faction ability or physical object that determines who uses the effect and when.
+  +1 to combat rolls is an effect that is registered where Moral Boost would be a source that is injected into it.
+  When you register an effect, you can add sources into it directly, if you are looking to add or replace sources in an existing effect, inject
+--]]
 
 --[[ --Ability format:
-local gameEffect = {
-  id = "", --give this ability a unique id
+local customGameEffect = {
+  id = "", --give this ability a unique id, other scripts may run their logic if this effect is active
   description = "",
   stackable = true, --can this effect be applied multiple times to the same player
   --Sources determine when this effect is in play and who it effects
@@ -110,13 +124,13 @@ local gameEffect = {
           *guid = "",
 
           requireFaceup = false,
-          requireActive = false, --Does the object have a toggle Active button; this will create a toggel button on the object if it is a card
+          requireActive = false, --Does the object have a toggle Active button; this will create a toggle button on the object if it is a card
           isDiscardable = false, --set to true to prevent this object from being found in its discard pile
         },
         FACTION_ABILITIES = {"abilityName_1",...},
         GET = {obj = self, func = "getSource"},
-        --params: {context, id = "id of gameEffect", color = "color of player in question"}
-        --return: bool, true if this source is active/in play
+        --params: {context, id = "id of gameEffect", objs = _foundObjects, abilities = _activeAbilityOwners}
+        --return: a "stringIdentifier" if this source is active or false
       }
 
       --If this source is active/in play, who will it effect?
@@ -124,33 +138,193 @@ local gameEffect = {
       --If target is "GET", you must include getTarget
       --getTarget = {obj = self, func = "myTargetFuncName"},
         --params: {context, id = "id of this gameEffect", objs = _foundObjects, abilities = _activeAbilityOwners}
-        --return: {[color] = #} table of colors to target and how many times to stack the effect
+        --return: nil or table{name = "", targets = {[color] = true/#}} --each target color is a [key] =eqaul to the number of times this source should apply to that player
 
       --Are there any players that cannot be targeted by this source?
-      targetIgnore = {
-        PROMMISSORY = "ComponentName",-- Finds the faction with this note and ignores it
-        FACTION = {""},
-        FACTION_ABILITY = {""},
+      targetExcludes = {
+        PROMMISSORY = {"PrommissoryName",},-- Finds the faction with this note and excludes it
+        FACTION_ABILITY = {"AbilityName"},
         GET = {obj = self, func = ""}
-          --params: {color, context, id}
-          --return: boolean; true to ignore color target
+          --params: {color ="colorInQuestion", context, id, objs = _foundObjects, abilities = _activeAbilityOwners}
+          --return: boolean; true to exclude color target
       },
 
       --*internal values
       --isActive = bool,
       --_foundObjects = {objRef}--objects from refs that have been found (and are faceup/active if required)
       --_activeAbilityOwners = {[color] = {ListOfAbilityNames}}, --color indexed list of colors whose factions have an ability found in refs.FACTION_ABILITIES
+      --*targetExclude tables are converted to tables indexed by values {["PromName"] = true}
   }},
-  --*internal vars
-  _contexts = {},--indexed by name, build from all contexts of sources
-    --perContext: _activeTargets = false, --or {[color] = #} table of color targets, and the number of times targeted
-    --_activeSourceNames = {[color]}
-
-  applyEffect = function(context, color, activeEffects)
+}--]]
+function registerAbility(newEffect)
+  assert(newEffect.id, "Game effects must have a unique ID,")
+  assert(newEffect.sources == nil or type(newEffect.sources) == "table")
+  local _sources = not newEffect.sources and {} or newEffect.sources[1] and newEffect.sources or {newEffect.sources} --convert to table of sources
+  _sources = copyTable(_sources)
+  local validSources = {}
+  local contexts = {}
+  for _,eachSource in ipairs(_sources) do
+    if _validateSource(eachSource) then
+      table.insert(validSources, eachSource)
+      --build contexts
+      for eachContext,_ in pairs(eachSource._hasContext) do
+        contexts[eachContext] = true
+      end
+    end
   end
-}
---]]
 
+  if _gameEffects[newEffect.id] then pcall(printToAll("WARNING: Overriding gameEffect >"..newEffect.id.."<", "Yellow")) end
+  _gameEffects[newEffect.id] = {
+    id = newEffect.id,
+    description = newEffect.description,
+    stackable = newEffect.stackable,
+    _hasContext = contexts,
+    sources = validSources
+  }
+  _reportInjection(newEffect.id)
+end
+
+--[[params: {
+  ability = "", or table{"",} --name/id of the abilities(gameEffects) to inject into
+  source = {}, your new source; if it's id matches an existing, it will replace the old source
+  --table format for a source is in the above documentation for registerAbility()--]]
+function injectAbilitySource(newSource)
+  assert(newSource.ability)
+  local source = copyTable(assert(newSource.source))
+  if not _validateSource(source) then return end
+
+  local injectTargets = type(newSource.ability) == "table" and newSource.ability or {newSource.ability}
+  local function _inject(into)
+    --update context
+    for _,eachContext in pairs(source.context) do
+      into._hasContext[eachContext] = true
+    end
+
+    --determine if this is an override
+    into.sources = into.sources or {}
+    for _,eachSource in ipairs(into.sources) do
+      if source.id and eachSource.id and eachSource.id == source.id then
+        pcall(printToAll("Warning: "..source.id.." already exists in "..into.id.."; overriding source.", "Yellow"))
+        into.sources[_] = copyTable(source)
+        _reportInjection(source.id, into.id)
+        return
+      end
+    end
+    table.insert(into.sources, copyTable(source))
+    _reportInjection(source.id, into.id)
+  end
+
+  for _,each in ipairs(injectTargets) do
+    if not _gameEffects[each] then pcall(printToAll("Failed to inject source into >"..each.."< Effect is not registered.", "Red"))
+    else
+      _inject(_gameEffects[each])
+    end
+  end
+end
+
+function _validateSource(source)
+
+  local function validateGET(getter)
+    assert(type(getter) == "table" and getter.func and type(getter.func) == "string")
+  end
+
+  --validate context
+  assert(source.context)
+  local context = type(source.context) == "table" and source.context or {source.context}
+  source._hasContext = {}
+  for _,eachContext in ipairs(context) do
+    assert(type(eachContext) == "string")
+    if not CONTEXT[eachContext] then
+      CONTEXT[eachContext] = true
+      pcall(printToAll("Creating new ability context >"..eachContext.."<", "Yellow"))
+    end
+    source._hasContext[eachContext] = true
+  end
+
+  local eTypes ={["OWNER"] = true,["OTHERS"] = true, ["ALL"] = true,["GET"] = true}
+  assert(source.targetType and eTypes[source.targetType])
+  if source.targetType == "GET" then assert(source.getTarget) validateGET(source.getTarget) end
+
+  --validate excludes
+  if source.targetExcludes then
+    if source.GET then validateGET(source.GET) end
+    if source.PROMMISSORY then
+      source.PROMMISSORY = type(source.PROMMISSORY) == "table" and source.PROMMISSORY or {source.PROMMISSORY}
+      for _,eachProm in ipairs(source.PROMMISSORY) do
+        assert(type(eachProm) == "string", "Prommissory notes should be strings; got: " ..type(eachProm))
+        source.PROMMISSORY[eachProm] = true
+      end
+    end
+    if source.FACTION_ABILITY then
+      source.FACTION_ABILITY = type(source.FACTION_ABILITY) == "table" and source.FACTION_ABILITY or {source.FACTION_ABILITY}
+      for _,eachAbility in ipairs(source.FACTION_ABILITY) do
+        assert(type(eachAbility) == "string", "Faction abilites should be strings; got: " ..type(eachAbility))
+        source.FACTION_ABILITY[eachAbility] = true
+      end
+    end
+  end
+
+  if source.refs then
+    if source.refs.GET then validateGET(source.refs.GET) end
+    if source.refs.FACTION_ABILITIES then
+      source.refs.FACTION_ABILITIES = type(source.refs.FACTION_ABILITIES) == "table" and source.refs.FACTION_ABILITIES or {source.refs.FACTION_ABILITIES}
+    end
+    if source.refs.OBJECTS then
+      source.refs.OBJECTS = type(source.refs.OBJECTS) == "table" and source.refs.OBJECTS[1] and source.refs.OBJECTS or {source.refs.OBJECTS}
+      for _,eachOBJ in ipairs(source.refs.OBJECTS) do
+        if type(eachOBJ) == "table" then
+          assert(eachOBJ.name or eachOBJ.guid)
+          if eachOBJ.requireActive then
+            assert(eachOBJ.name, "Must provide a name field for an object to gain a toggleActive button")
+            registerToggleCard(eachOBJ.name)
+          end
+        else assert(type(eachOBJ) == "string")
+        end
+      end
+    end
+  else assert(source.isUniversalRule, "You must provide a refs table to identify effected players if a source is not universal")
+  end
+
+  source._foundObjects = {}
+  source._activeAbilityOwners = {}
+  source.isActive = false
+  return true
+end
+
+local _waitingReport = false --{effects, sources}
+function _reportInjection(name, source)
+  if not _waitingReport then
+    _waitingReport = {effects = {}, sources = {}}
+    Wait.frames(function()
+      local function _buildPrintReport(firstLine, tbl, keyIsVal)
+          local t = { firstLine }
+          for k,v in pairs(tbl) do
+              t[#t+1] = tostring(keyIsVal and k or v)
+          end
+          return table.concat(t,", ")
+      end
+
+      local effectMsg = next(_waitingReport.effects) and _buildPrintReport("New abilities registerd: \n",_waitingReport.effects) or false
+      if effectMsg then pcall(printToAll(effectMsg, "Yellow")) end
+      for eachSource,names in pairs(_waitingReport.sources or {}) do
+        pcall(printToAll(_buildPrintReport("Ability sources injected injected to "..eachSource..": \n",names, true), "Yellow"))
+      end
+
+      _waitingReport = false
+    end, 3)
+  end
+
+  if source then
+    _waitingReport.sources[source] = _waitingReport.sources[source] or {}
+    table.insert(_waitingReport.sources[source], name)
+  else
+    table.insert(_waitingReport.effects, name)
+  end
+end
+
+--_getActiveAbilities-----------------------------------------------------------
+
+--_step1
 local _sourceObjsThisFrame = false
 function _gatherSourceObjs()
   if _sourceObjsThisFrame then return end
@@ -185,9 +359,13 @@ function _gatherSourceObjs()
     local objName = eachObj.getName()
     local objGuid = eachObj.getGUID()
 
-    local mergedResults = copyTable(objsToFind.guids[objGuid] or {})
-    local foundObjs = objsToFind.names[objName] or {}
-    for _,each in ipairs(foundObjs) do
+    local mergedResults = {}
+    local foundNames = objsToFind.names[objName] or {}
+    for _,each in ipairs(foundNames) do
+      table.insert(mergedResults, each)
+    end
+    local foundGuids = objsToFind.guids[objGuid] or {}
+    for _,each in ipairs(foundGuids) do
       table.insert(mergedResults, each)
     end
 
@@ -218,6 +396,7 @@ function _gatherSourceObjs()
   end
 end
 
+--_step2
 function _getActiveSources(context)
   assert(context and CONTEXT[context])
   local abilitiesToFind = {}
@@ -226,10 +405,10 @@ function _getActiveSources(context)
     local result = {}
     local _factions = _factionHelper.allFactions()
     --This func may be run while _colorToFaction is being built, so we'll have to run through _factionData to get factions with a color field
-    for factionName,data in pairs(_factions or {}) do
+    for _,data in pairs(_factions or {}) do
       if data.color then --Faction is unpacked
         for _,eachAbility in ipairs(data.abilities) do
-          if eachAbility == abilityName then table.insert(result, factionName) break end
+          if eachAbility == abilityName then table.insert(result, data.color) break end
         end
       end
     end
@@ -239,7 +418,6 @@ function _getActiveSources(context)
 
   for eachEffect,data in pairs(_gameEffects) do
     if data._hasContext[context] then
-      data._activeTargets[context] = {}
       for _,eachSource in ipairs(data.sources or {}) do
         if eachSource._hasContext[context] then
           --is it a universal rule or have we already found some of its source objects
@@ -261,17 +439,17 @@ function _getActiveSources(context)
   end
 
   --get the color of factions with a target ability
-  for abiliytName,data in pairs(abilitiesToFind) do
-    for _,eachFaction in ipairs(unpackedFactionsWithAbility(abilityName) or {}) do
+  for abilityName,data in pairs(abilitiesToFind) do
+    for _,eachFactionColor in ipairs(unpackedFactionsWithAbility(abilityName) or {}) do
       for _,eachSource in ipairs(data) do
-        eachSource.source.isActive = true
-        eachSource._activeAbilityOwners[eachFaction.color] = eachSource._activeAbilityOwners[eachFaction.color] or {} --init color table
-        eachSource._activeAbilityOwners[eachFaction.color][abilityName] = true --add abilityName as key
+        eachSource.isActive = true
+        eachSource._activeAbilityOwners[eachFactionColor] = eachSource._activeAbilityOwners[eachFactionColor] or {} --init color table
+        eachSource._activeAbilityOwners[eachFactionColor][abilityName] = true --add abilityName as key
       end
     end
   end
 end
-
+--_step3(calls _getEffectTargets for each effect)
 function _getActiveEffects(context)
   assert(context and CONTEXT[context])
   _activeEffects[context] = {}
@@ -281,23 +459,62 @@ function _getActiveEffects(context)
     end
   end
 end
-
+--_step3 looped
 function _getEffectTargets(context, effect)
   if not effect._hasContext[context] then return end
+
   local _result = {}
+  local _exludeCache = {}
+  local function targetIsExcluded(source, color)
+    if not source.targetExcludes then return false end
+    if _exludeCache[source.id] and _exludeCache[source.id][color] then return true end
+
+    local mask = source.targetExcludes
+    local faction = _factionHelper.fromColor(color) or {}
+    if mask.PROMMISSORY then
+      for _,eachNote in ipairs(faction.promissoryNotes or {}) do
+        if mask.PROMMISSORY[eachNote] then
+          _exludeCache[source.id] = _exludeCache[source.id] or {}
+          _exludeCache[source.id][color] = true
+          return true
+        end
+      end
+    end
+
+    if mask.FACTION_ABILITY then
+      for _,eachAbility in ipairs(faction.abilities or {}) do
+        if mask.FACTION_ABILITY[eachAbility] then
+          _exludeCache[source.id] = _exludeCache[source.id] or {}
+          _exludeCache[source.id][color] = true
+          return true
+        end
+      end
+    end
+
+    if mask.GET then
+      local exclude = tryCall(mask.GET, {color = color, context = context, id = effect.id, objs = source._foundObjects, abilities = source._activeAbilityOwners}) or false
+      if exclude then return true end --dont cache GET results
+    end
+
+    return false
+  end
+
   --params: {color = zoneColor, name = objOrAbilityName, source = source, obj = eachObj}
   local function documentSource(params)
-    local id = params.source.id or "No source ID"
+    if targetIsExcluded(params.source, params.color) then return end
+
     _result[params.color] = _result[params.color] or {count = 0, sources = {}}
 
-    _result[params.color].sources[params.name] = _result[params.color].sources[params.name] or {count = 0, refs = {}}
-    local sourceTable = _result[params.color].sources[params.name]
+    local sourceID = params.source.id or "Missing Source ID"
+    _result[params.color].sources[sourceID] = _result[params.color].sources[sourceID] or {count = 0, refs = {}}
+    local sourceTable = _result[params.color].sources[sourceID]
     sourceTable.count = not params.source.stackable and 1 or sourceTable.count + (params.count or 1)
+
     --add found obj/ability to refs table
     sourceTable.refs[params.name] = sourceTable.refs[params.name] or {objs = {}, count = 0}
     local refTable = sourceTable.refs[params.name]
     if params.obj then table.insert(refTable.objs, params.obj) end
-    refTable.count = refTable.count + (refTable.count or 1)
+    refTable.count = refTable.count + (params.count or 1)
   end
 
   local function getTargetsFromGet(source)
@@ -320,7 +537,7 @@ function _getEffectTargets(context, effect)
     for _,eachObj in ipairs(source._foundObjects or {}) do
       local zoneColor = _zoneHelper.zoneFromPosition(eachObj.getPosition())
       if zoneColor then
-        documentSource({color = zoneColor, name = eachObj.getName, source = source, obj = eachObj})
+        documentSource({color = zoneColor, name = eachObj.getName(), source = source, obj = eachObj})
       end
     end
     --if a faction has the specified ability, add that player to targets
@@ -520,12 +737,27 @@ function onObjectSpawn(object)
 end
 
 --------------------------------------------------------------------------------
+function testGetRef() end
+local effect_1 = {
+  id = "Test Effect",
+  stackable = true,
+  sources = {{
+    id = "testSources",
+    stackable = true,
+    context = {"test", "spaceCannon"},
+    --isUniversalRule = true,
+    targetType = "OWNER",
+    refs = { OBJECTS = {{name = "Antimass Deflectors", requireFaceup = true}, {name = "Claire Gibson", requireActive = true, requireFaceup = true}},
+            FACTION_ABILITIES = {"Orbital Drop", "Crafty"}
+    }
+  }}
+}
+
 function onPlayerPing(player, position)
-  local result = getActiveAbilities({context = "adjacency", color = "Blue"})
-  for id,each in pairs(_gameEffects) do
-    print(id, " isActive: ", each.sources[1].isActive)
-  end
+  local result = getActiveAbilities({context = "test", color = "White"})
   printTable(result)
+  --printTable(_activeEffects)
+  --printTable(_gameEffects)
 end
 --------------------------------------------------------------------------------
 function initEffects()
@@ -534,10 +766,9 @@ function initEffects()
   end
   for _,each in pairs(_gameEffects) do
     each._hasContext = each._hasContext or {}
-    each._activeTargets = {}
-    each._activeSourceNames = {}
 
-    for _,eachSource in ipairs(each.sources or {}) do
+    for id,eachSource in ipairs(each.sources or {}) do
+      eachSource.id = id
       eachSource.isActive = false
       eachSource._foundObjects = {}
       eachSource._activeAbilityOwners = {}
@@ -552,6 +783,7 @@ end
 
 function onLoad(saveState)
   initEffects()
+  registerAbility(effect_1)
 
   -- Make toggle cards toggle-able.
   Wait.frames(_applyToggleActiveCards, 8)
@@ -586,22 +818,39 @@ end
 
 function printTable(table)
   if not table or type(table) ~= 'table' then print("Error: printTable() requires a table param.") return end
+  if not next(table) then print("Empty") end
 
   local function typeToPrintable(input)
+   if input == nil then return "nil" end
+   if type(input) == "string" and input == "" then return '""' end
    if type(input) == 'boolean' then return input and "true" or "false" end
    if type(input) == 'userdata' then return "userData" end
+   if type(input) == "function" then return "function" end
    return input
   end
 
-  for k,v in pairs(table) do
-    local kString = typeToPrintable(k)
-    if type(v) == 'table' then
-      print("--" .. kString .. " table:")
-      printTable(v)
-    else
-      print(kString .. ": " .. typeToPrintable(v))
+  local function pt(_table, depth)
+    local string = ""
+    for i = 1, depth, 1 do
+      string = string .. "-"
+    end
+
+    for k,v in pairs(_table) do
+      local keyString = typeToPrintable(k)
+      if type(v) == "table" then
+        local tableString = string .. keyString .. " = {"
+        if not next(v) then tableString = tableString .. "}" end
+        print(tableString)
+        pt(v, depth + 1)
+        print(string .. "}")
+      else
+        print(string .. keyString .. ": " .. typeToPrintable(v))
+      end
     end
   end
+
+  print("______________")
+  pt(table, 0)
 end
 
 local _lockGlobalsMetaTable = {}
