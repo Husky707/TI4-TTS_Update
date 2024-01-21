@@ -472,7 +472,7 @@ local _systems = {
 }
 
 local _wormholeTypes = {
-  "alpha", "beta", "delta", "gamma",
+  ["alpha"] = "Orange", ["beta"] = "Green", ["delta"] = "Blue", ["gamma"] = "Pink"
 }
 local _connectionsThisFrame = false
 local CONNECTIONS = { _activeConnections = {}, _systemConectivity = {}}
@@ -846,7 +846,7 @@ function wormholes(playerColor)
   }--]]
   }
   CONNECTIONS.build()
-  for _,eachWormhole in ipairs(_wormholeTypes) do
+  for eachWormhole,_ in pairs(_wormholeTypes) do
     result[eachWormhole] = {
       guids = {},
       connected = {}
@@ -876,18 +876,20 @@ end
 
 --gets all adjacent systems after all modifers/rules are applied.
   --checks physical neighbors, hyperlane neighbors, and connections through wormholes and other injected connections
---return: table of adjacent system guids with hex locations: {["guid1"] = {hex = "hexPosition"}, ["g2"] =...}
+--return: table of adjacent system guids with hex locations: {["guid1"] = {hex = "hexPosition", system = systemTable}, ["g2"] =...}
 --params: {
-  --color = "playerColor",--players (like ghosts) may have different system adjacency
+  --color = "playerColor",--players (like ghosts) may have different system adjacency --*optional defaults to Turns.turn_color
   --system = "systemGUID" *optional:defaults to active system,
   --highlight = bool or # *optional:defaults to no highlight. true = permanent highlight, # = duration. Highlights all adjacent systems
 --}
 function getAdjacentSystems(params)
   assert(params and type(params) == "table")
   assert(params.system == nil or type(params.system) == "string")
-  assert(params.color and type(params.color) == "string")
+  assert(params.color == nil or (params.color and type(params.color) == "string"))
+  local color = assert(params.color or (Turns.enable and Turns.turn_color) or false, "Could not determine a color.")
   local system = params.system or (getActivatedSystem() and getActivatedSystem().guid) or false
-  if not system then return end
+  assert(system, "Could not determine active system.")
+
   return _getAdjacentSystems(system, params.color, params.highlight)
 end
 
@@ -933,6 +935,19 @@ end
 --when you call getAdjacentSystems, you can optionally highlight all the adjacent systems. This function removes those highlights
 function removeSystemHighlights()
   _removeSystemHighlights()
+end
+
+--expose the ability to activate a system to other scripts
+--params: {system = "GUID" of system tile, color = new active player *optional, defaults to current turn color}
+function activateSystem(params)
+  params = params or {}
+  assert(params.system and type(params.system) == "string")
+  local system = _systems[params.system]
+  if not system then return end
+  local color = params.color or (Turns.enable and Turns.turn_color)
+  if not color then return end
+
+  _activateSystem(color, system)
 end
 
 --Injection----------------------------------------------------------------------
@@ -1049,12 +1064,13 @@ end
   --injection will generate the wormhole's connectionRule and adds support for a Wormhole Token
   params: "stringName" or table:{
     name = "string",*the only required field. All lower case
+    color = "", *Optional, defaults to "Teal". What color represents this wormhole
     additionalConnections =  "string"|{table of strings}, --by default the wormhole connects only to itself, you may add other connection types {"alpha", "beta"...}
   }--]]
 function injectWormhole(params)
   params = params or {}
   local name = type(params) == "string" and params or assert(params.name)
-  table.insert(_wormholeTypes, name)
+  _wormholeTypes[name] = params.color or "Teal"
 
   --prep fields
   local capsName = name:gsub("^%l", string.upper)
@@ -2273,7 +2289,7 @@ end
     [color] = {
       connections = {
         ["connectionName"] = {
-          --values in these tables are stroed as keys to prevent douplicate entries
+          --values in these tables are stored as keys to prevent douplicate entries
           systems = {[guid] = true,...},
           connectsTo = { ["alpah"] = true,...}
         }
@@ -2408,7 +2424,11 @@ function _linkConnectionToWormholes(params)
 end
 
 function _linkToOtherWormholes(params)
-  return _linkConnectionToWormholes({linkTo = _wormholeTypes, connectsTo = params.connectsTo})
+  local worms = {}
+  for each,_ in pairs(_worholeTypes) do
+    table.insert(worms, each)
+  end
+  return _linkConnectionToWormholes({linkTo = worms, connectsTo = params.connectsTo})
 end
 
 --params = {color, obj, system}
@@ -2444,11 +2464,9 @@ function getLazaxGateFolding()
   return {}
 end
 --------
-local _highlightedSystems = false
-local _waitingHighlightReset = false
 
 --gets neighbors, hyperlane neighbors, and connections through wormholes and other injected connections
---return: table of adjacent system guids with hex and system data: {["guid1"] = {hex = hexPosition}}
+--return: table of adjacent system guids with hex and system data: {["guid1"] = {hex = hexPosition, system = systemTable}}
 function _getAdjacentSystems(systemGuid, playerColor, highlight)
   local systemObj = getObjectFromGUID(systemGuid)
   if systemObj == nil then return {} end
@@ -2463,7 +2481,7 @@ function _getAdjacentSystems(systemGuid, playerColor, highlight)
     local sObj = getObjectFromGUID(eachGUID)
     if sObj ~= nil then
       local hex = hexFromPosition(sObj.getPosition())
-      result[eachGUID] = {hex = hex}
+      result[eachGUID] = {hex = hex, system = _systems[eachGUID]}
     end
   end
 
@@ -2472,34 +2490,71 @@ function _getAdjacentSystems(systemGuid, playerColor, highlight)
   for _,eachHex in ipairs(neighbors) do
     local system = systemFromPosition(hexToPosition(eachHex))
     if system ~= nil then
-      result[system.guid] = {hex = eachHex}
+      result[system.guid] = {hex = eachHex, system = system}
     end
   end
 
-  result[systemGuid] = nil
-  if highlight then
-    --turn off any previously highlighted sytems
-    for _,eachObj in ipairs(_highlightedSystems or {}) do
-      if eachObj ~= nil then eachObj.highlightOff() end
-    end
-    if _waitingHighlightReset then
-      Wait.stop(_waitingHighlightReset)
-      _waitingHighlightReset = false
-    end
-
-    _highlightedSystems = {}
-    local duration = type(highlight) == "number" and highlight or nil --nil defaults to always on
-    if duration then _waitingHighlightReset = Wait.time(function() _waitingHighlightReset = false _highlightedSystems = {} end, duration) end
-    for eachGUID,_ in pairs(result) do
-      local systemObj = getObjectFromGUID(eachGUID)
-      if systemObj then
-        table.insert(_highlightedSystems, systemObj)
-        systemObj.highlightOn("White", duration)
-      end
-    end
-  end
+  result[systemGuid] = nil --active system not adjacent to self
+  if highlight then _highlightSystems(result, playerColor, type(highlight) == "number" and highlight or nil) end
 
   return result
+end
+
+--params:
+  --system = {[guid_1] = true,...} table indexed by system guid (the format of system tables in getAdjSystems)
+  --colorPerspective = "color". Faction abilities can effect system connections
+  --duration = # *optional, defaults to permanent highlight
+local _highlightedSystems = false
+local _waitingHighlightReset = false
+function _highlightSystems(systems, colorPerspective, duration)
+  --turn off any previously highlighted sytems
+  for _,eachObj in ipairs(_highlightedSystems or {}) do
+    if eachObj ~= nil then eachObj.highlightOff() end
+  end
+  if _waitingHighlightReset then
+    Wait.stop(_waitingHighlightReset)
+    _waitingHighlightReset = false
+  end
+
+  local function getBestHighlight(systemGuid)
+    if not CONNECTIONS._systemConectivity or not CONNECTIONS._systemConectivity[colorPerspective] or not CONNECTIONS._systemConectivity[colorPerspective][systemGuid] then return "White" end
+
+    local scoreColor = { "White", "Green", "Orange", "Brown", "Teal", "Pink", "Blue", "Purple" }
+    local weight = {
+      ["beta"] = 1,
+      ["alpha"] = 2,
+      --a&b = 3
+      --injectedWormholes = 4
+      ["gamma"] = 5,
+      ["delta"] = 6,
+      --nonWormhole/injected connections = 7
+    }
+
+    local best = 0
+    local _connections = CONNECTIONS._systemConectivity[colorPerspective][systemGuid] or {}
+    local aAndb = 0
+
+    for each,_ in pairs(_connections) do
+      --known wormhole or injected wormhole or non-wormhole connection
+      local score = weight[each] or (_wormholeTypes[each] and 4) or 7
+      aAndb = aAndb + ((each == "alpha" or each == "beta") and 1 or 0)
+      score = aAndb == 2 and score < 3 and 3 or score
+      if score == 4 then scoreColor[5] = _wormholeTypes[each] end --get the color of injected wormhole
+      best = score > best and score or best
+    end
+
+    return scoreColor[best + 1] -- +1 because default value(White) is 0. oops
+  end
+
+  _highlightedSystems = {}
+  if duration then _waitingHighlightReset = Wait.time(function() _waitingHighlightReset = false _highlightedSystems = {} end, duration) end
+  for eachGUID,_ in pairs(systems) do
+    local systemObj = getObjectFromGUID(eachGUID)
+    if systemObj then
+      table.insert(_highlightedSystems, systemObj)
+      systemObj.highlightOn(getBestHighlight(eachGUID), duration)
+    end
+  end
 end
 
 function _removeSystemHighlights()
@@ -3103,13 +3158,13 @@ end
 function onClickActivateSystem(clickerColor, systemObject)
     assert(type(clickerColor) == 'string' and type(systemObject) == 'userdata')
     local system = systemFromGuid(systemObject.getGUID())
-    -- No need to announce, activateSystem will do that.
+    -- No need to announce, _activateSystem will do that.
     if (not Turns.enable) or Turns.turn_color ~= clickerColor then
         printToColor('Activate system: ' .. clickerColor .. ' is not the active player, ignoring', clickerColor, 'Red')
         return
     end
     if _moveTokenFromCommandSheet(systemObject, clickerColor, 'tactics') then
-        activateSystem(clickerColor, system)
+        _activateSystem(clickerColor, system)
     end
 end
 
@@ -3211,10 +3266,10 @@ function onObjectDrop(playerColor, object)
         return
     end
 
-    activateSystem(playerColor, system)
+    _activateSystem(playerColor, system)
 end
 
-function activateSystem(playerColor, system)
+function _activateSystem(playerColor, system)
     assert(type(playerColor) == 'string' and type(system) == 'table')
 
     _fillMissingSystemData(system.guid, system)
