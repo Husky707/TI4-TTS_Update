@@ -34,13 +34,43 @@ local events =
   },
 }
 
-------------------------------------------------------------------------------------------------------------------------
---Public functions: addListener, removeListener, invoke, createEvent
---Interact with the event system here
+local _workingEvents = {}--{[eventName] = co}
+local Coru = {
+ _coroutines = {},
+ _coRunner = false,
+ _coQueue = {},
+ _coKillQueue = {},
+ step = {
+   ["running"] = function() end,
+   ["normal"] = function() end,
+   ["suspended"] = function(eachCo, callbackData)
+     local status, result = coroutine.resume(eachCo)
+     if not status then
+       print("Coroutine error: ", result)
+       if callbackData and callbackData.callback then callbackData.callback(result) end
+       return -1
+     else
+       if callbackData and callbackData.yieldback then callbackData.yieldback(result) end
+     end
+   end,
+   ["dead"] = function(eachCo, callbackData)
+     if callbackData and callbackData.callback then callbackData.callback(1) end
+     return -1
+   end,
+   ["catch"] = function(eachCo, callbackData, badState)
+     print("Caught a bad coru state: ", badState)
+     if callbackData and callbackData.callback then callbackData.callback(-1) end
+     return -1
+    end
+ },
+}
+
+--Interact with the event system here--------------------------------------------
+--Public functions: addListener, removeListener, invoke, invokeAsync, createEvent
 
 --[[params:
     eventName = string name of target event,
-    objGUID = guid of the listening object that contains the callback function,
+    objGUID = guid of the listening object that contains the callback function, object must exist when it is registered
     callback = *optional- string name of callback function. Defaults to "on" .. EventName ex: turnStart -> onTurnStart (notice capitalization!!)--]]
     --p: ({eventName, objGUID, callback})
 function addListener(params)
@@ -66,6 +96,7 @@ function addListener(params)
 end
 
 --Params: {eventName, objGUID}
+--removal is done automatically if a listening object is nil when an event callback is sent to it
 function removeListener(params)
   assert(params.eventName and type(params.eventName) == 'string')
   assert(params.objGUID)
@@ -74,16 +105,22 @@ function removeListener(params)
   events[params.eventName].listeners[params.objGUID] = nil
 end
 
---params: {event = "", params = {}}
+--params: {event = "", params = {Any data you want to pass with the event}, async = bool (separate listeners across frames in a coru)}
 function invoke(params)
+  if params.async then return invokeAsync(params) end
   assert(params.event and type(params.event) == 'string')
-  assert(events[params.event], "Field to invoke: Event >"..params.event.."<  does not exist.")
+  assert(events[params.event], "Failed to invoke: Event >"..params.event.."<  is not registered.")
+
+  if _workingEvents[params.event] then
+    return false, "Event is being invoked."
+  end
+
   local listeners = events[params.event].listeners or {}
   if not next(listeners) then return end
 
   --call events. Mark nil objects for removal
   --print("Invoking " .. params.event .. ".")
-  function tryCall(callData)
+  local function tryCall(callData)
     local function try()
       assert(callData and type(callData) == "table")
       assert(callData.listenObject ~= nil and type(callData.listenObject) == "userdata")
@@ -113,7 +150,60 @@ function invoke(params)
   end
 end
 
---params: {eventName, callbackName(optional-- defaults to "onEventName")}
+--same as invoke, but spreads listener calls across frames in a coru
+--returns false, "already invoking" if the invoke fails
+function invokeAsync(params)
+  assert(params.event and type(params.event) == 'string')
+  assert(events[params.event], "Failed to invoke: Event >"..params.event.."<  is not registered.")
+  if _workingEvents[params.event] then
+    return false, "already invoking."
+  end
+  _workingEvents[params.event] = true
+
+  local listeners = events[params.event].listeners or {}
+  if not next(listeners) then return true end
+
+  local _co = coroutine.create(function()
+    local nilObjs = {}
+    local function tryCall(callData)
+      local function try()
+        assert(callData and type(callData) == "table")
+        assert(callData.listenObject ~= nil and type(callData.listenObject) == "userdata")
+        assert(callData.callback and type(callData.callback) == "string" and callData.listenObject.getVar(callData.callback), 'missing ' .. callData.listenObject.getName() .. '.' .. callData.callback)
+
+        return callData.listenObject.call(callData.callback, params.params)
+      end
+      local success, result = pcall(try)
+      if not success then
+        --print("Failed callback: callData incorrectly formated. ", result)
+        return
+      end
+      return result
+    end
+
+    --call events. Mark nil objects for removal
+    --print("Invoking " .. params.event .. ".")
+    for id,each in pairs(listeners) do
+      if each.listenObject ~= nil then
+        tryCall(each)
+        coroutine.yield(0)
+      else
+        table.insert(nilObjs, id)
+      end
+    end
+
+    --remove nil refs
+    for _,each in pairs(nilObjs) do
+      listeners[each] = nil
+    end
+
+    _workingEvents[params.event] = false
+  end)
+
+  Coru.run(_co)
+end
+
+--params: {eventName, callbackName(*optional-- defaults to "onEventName")}
 function createEvent(params)
     local function _firstToUpper(str)
       return (str:gsub("^%l", string.upper))
@@ -132,6 +222,82 @@ function createEvent(params)
   return true
 end
 
+-------------------------------------------------------------------------------
+function CoroutineRunner()
+  while next(Coru._coroutines) do
+    local deadList = {}
+    --Progress each coroutine
+    for eachCo,callbackData in pairs(Coru._coroutines) do
+      local status = coroutine.status(eachCo)
+      status = Coru.step[status] and status or "catch"
+      local isDead = Coru.step[status](eachCo, callbackData) == -1 or status == "dead"
+      if isDead then table.insert(deadList, eachCo) end
+    end
+
+    --Empty killQueue
+    for _,each in ipairs(Coru._coKillQueue) do
+      table.insert(deadList, each)
+    end
+    Coru._coKillQueue = {}
+
+    --Remove dead coroutines
+    for _,each in ipairs(deadList) do
+      Coru._coroutines[each] = nil
+    end
+
+    coroutine.yield(0)
+    --Add any waiting coroutines here
+    for _,each in ipairs(Coru._coQueue) do
+      Coru._coroutines[each.co] = {callback = each.callback, yieldback = each.yieldback}
+    end
+    Coru._coQueue = {}
+  end
+
+  Coru._coRunner = false
+  return 1
+end
+
+--callbackData = { yieldback = func (called each time co yeilds), callback = func (called when co ends)}
+Coru.run = function(newCo, callbackData)
+  if Coru._coRunner then
+    table.insert(Coru._coQueue, {co = newCo, callback = callbackData and callbackData.callback, yieldback = callbackData and callbackData.yieldback})
+  else
+    Coru._coroutines[newCo] = {callback = callbackData and callbackData.callback, yieldback = callbackData and callbackData.yieldback}
+    Coru._coRunner = startLuaCoroutine(self, "CoroutineRunner")
+  end
+end
+
+Coru.stop = function(co)
+  for _,each in ipairs(Coru._coQueue) do
+    if each.co == co then
+      if each.callback then each.callback(-1) end
+      each = nil
+      break
+    end
+  end
+  if not Coru._coroutines[co] then return end
+
+  if Coru._coRunner then
+    if Coru._coroutines[co].callback then Coru._coroutines[co].callback(-1) end
+    table.insert(Coru._coKillQueue, co)
+  else
+    if Coru._coroutines[co].callback then Coru._coroutines[co].callback(-1) end
+    Coru._coroutines[co] = nil
+  end
+end
+
+Coru.wait = function(t, callback)
+  local newWait = coroutine.create(function()
+    local t1 = Time.time
+    while Time.time - t1 < t do
+      coroutine.yield(0)
+    end
+    return 1
+  end)
+
+  Coru.run(newWait, {callback = callback})
+  return newWait
+end
 -------------------------------------------------------------------------------
 function onLoad(saveState)
     self.setColorTint({ r = 0.25, g = 0.25, b = 0.25 })

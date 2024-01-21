@@ -13,7 +13,7 @@ local _factionHelper = getHelperClient('TI4_FACTION_HELPER')
 local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
 
 local _activeEffects = {} --{[perContext] = {[perColor] = {[activeEffects]}}} --updated when called, up to once per frame unless forced
-local _toggleCards = {["Emissary Taivra"] = true} --indexed by object names{[name] = true}
+local _toggleCards = {} --indexed by object names{[name] = true}
 local _toggleUpdate = false
 
 -- abilities are what enable players to use gameEffects. Abilities are used within a CONTEXT
@@ -111,7 +111,7 @@ local customGameEffect = {
   sources = {
     {
       context = "", -- "" or {table strings}; See CONTEXT for available names
-      isUniversalRule = false, --Is this rule allways in play (within context)?
+      isUniversalRule = false, --Is this rule allways in play (within context)? --tardetType must be ALL or GET
       stackable = true, --can this source stack with itself to apply multiple times?
       --if not universal, refs are how we determine if this source is active/in play
       refs = {
@@ -121,16 +121,15 @@ local customGameEffect = {
          {--objectTable =
           --*How to find this object(include only 1)
           *name = "",
-          *guid = "",
+          *guid = "", --!(isCommander,isPromissory, and requireActive fields are not compatable with finding by guid, use name if you want these)
 
           requireFaceup = false,
           requireActive = false, --Does the object have a toggle Active button; this will create a toggle button on the object if it is a card
           isDiscardable = false, --set to true to prevent this object from being found in its discard pile
+          isCommander = false, --Will add "__ Alliance"
+          isPromissory = false, --Will prevent this source from targetting the Promissory note's native faction
         },
         FACTION_ABILITIES = {"abilityName_1",...},
-        GET = {obj = self, func = "getSource"},
-        --params: {context, id = "id of gameEffect", objs = _foundObjects, abilities = _activeAbilityOwners}
-        --return: a "stringIdentifier" if this source is active or false
       }
 
       --If this source is active/in play, who will it effect?
@@ -142,7 +141,7 @@ local customGameEffect = {
 
       --Are there any players that cannot be targeted by this source?
       targetExcludes = {
-        PROMMISSORY = {"PrommissoryName",},-- Finds the faction with this note and excludes it
+        PROMISSORY = {"PromissoryName",},-- Finds the faction with this note and excludes it
         FACTION_ABILITY = {"AbilityName"},
         GET = {obj = self, func = ""}
           --params: {color ="colorInQuestion", context, id, objs = _foundObjects, abilities = _activeAbilityOwners}
@@ -151,6 +150,7 @@ local customGameEffect = {
 
       --*internal values
       --isActive = bool,
+      _excludes = { [objName] = "promissoryNotes"|"commander"},
       --_foundObjects = {objRef}--objects from refs that have been found (and are faceup/active if required)
       --_activeAbilityOwners = {[color] = {ListOfAbilityNames}}, --color indexed list of colors whose factions have an ability found in refs.FACTION_ABILITIES
       --*targetExclude tables are converted to tables indexed by values {["PromName"] = true}
@@ -241,31 +241,32 @@ function _validateSource(source)
     source._hasContext[eachContext] = true
   end
 
-  local eTypes ={["OWNER"] = true,["OTHERS"] = true, ["ALL"] = true,["GET"] = true}
-  assert(source.targetType and eTypes[source.targetType])
+  local eTypes ={["OWNER"] = true,["OTHERS"] = true, ["ALL"] = true, ["GET"] = true}
+  assert(source.targetType and eTypes[source.targetType], source.targetType.." is not a valid target type.")
   if source.targetType == "GET" then assert(source.getTarget) validateGET(source.getTarget) end
 
   --validate excludes
   if source.targetExcludes then
-    if source.GET then validateGET(source.GET) end
-    if source.PROMMISSORY then
-      source.PROMMISSORY = type(source.PROMMISSORY) == "table" and source.PROMMISSORY or {source.PROMMISSORY}
-      for _,eachProm in ipairs(source.PROMMISSORY) do
-        assert(type(eachProm) == "string", "Prommissory notes should be strings; got: " ..type(eachProm))
-        source.PROMMISSORY[eachProm] = true
+    local excludes = source.targetExcludes
+    if excludes.GET then validateGET(excludes.GET) end
+    if excludes.PROMISSORY then
+      excludes.PROMISSORY = type(excludes.PROMISSORY) == "table" and excludes.PROMISSORY or {excludes.PROMISSORY}
+      for _,eachProm in ipairs(excludes.PROMISSORY) do
+        assert(type(eachProm) == "string", "Promissory notes should be strings; got: " ..type(eachProm))
+        excludes.PROMISSORY[eachProm] = true
       end
     end
-    if source.FACTION_ABILITY then
-      source.FACTION_ABILITY = type(source.FACTION_ABILITY) == "table" and source.FACTION_ABILITY or {source.FACTION_ABILITY}
-      for _,eachAbility in ipairs(source.FACTION_ABILITY) do
+    if excludes.FACTION_ABILITY then
+      excludes.FACTION_ABILITY = type(excludes.FACTION_ABILITY) == "table" and excludes.FACTION_ABILITY or {excludes.FACTION_ABILITY}
+      for _,eachAbility in ipairs(excludes.FACTION_ABILITY) do
         assert(type(eachAbility) == "string", "Faction abilites should be strings; got: " ..type(eachAbility))
-        source.FACTION_ABILITY[eachAbility] = true
+        excludes.FACTION_ABILITY[eachAbility] = true
       end
     end
   end
 
   if source.refs then
-    if source.refs.GET then validateGET(source.refs.GET) end
+    if source.refs.GET then error("Support for refs.GET was removed.") end-- validateGET(source.refs.GET) end
     if source.refs.FACTION_ABILITIES then
       source.refs.FACTION_ABILITIES = type(source.refs.FACTION_ABILITIES) == "table" and source.refs.FACTION_ABILITIES or {source.refs.FACTION_ABILITIES}
     end
@@ -283,6 +284,9 @@ function _validateSource(source)
       end
     end
   else assert(source.isUniversalRule, "You must provide a refs table to identify effected players if a source is not universal")
+  end
+  if source.isUniversalRule then
+    assert(source.targetType == "ALL" or source.targetType == "GET", "Universal rules must target ALL players or may define a GET function to determine targets")
   end
 
   source._foundObjects = {}
@@ -343,12 +347,26 @@ function _gatherSourceObjs()
           local key = findByName or OBJ.guid
           intoTable[key] = intoTable[key] or {}
           local isTbl = type(OBJ) == "table"
-          local val = {
-            source = eachSource,
-            requireFaceup = isTbl and OBJ.requireFaceup,
-            requireActive = isTbl and OBJ.requireActive,
-            isDiscardable = isTbl and OBJ.isDiscardable,
-          }
+          local val = type(OBJ) == "table" and copyTable(OBJ) or {}
+          val.source = eachSource
+          --Find alliance if this is a commander
+          if val.isCommander and findByName then
+            local hasCol, shortName = getNativeFaction(findByName, "commander")
+            if hasCol then --is faction unpacked
+              local allianceName = shortName .. " Alliance"
+              --create an exclude for native faction
+              eachSource._excludes = eachSource._excludes or {}
+              eachSource._excludes[allianceName] = "commander"
+              --add alliance card to objects to find
+              objsToFind.names[allianceName] = objsToFind.names[allianceName] or {}
+              table.insert(objsToFind.names[allianceName], {source = eachSource, requireFaceup = true, requireActive = val.requireFaceup})
+            end
+          end
+          if val.isPromissory and findByName then
+            --we dont care if the native faction is unpacked, if note is found, it'll check this during getTargets step
+            eachSource._excludes = eachSource._excludes or {}
+            eachSource._excludes[findByName] = "promissoryNotes"
+          end
           table.insert(intoTable[key], val)
         end
       end
@@ -471,9 +489,9 @@ function _getEffectTargets(context, effect)
 
     local mask = source.targetExcludes
     local faction = _factionHelper.fromColor(color) or {}
-    if mask.PROMMISSORY then
+    if mask.PROMISSORY then
       for _,eachNote in ipairs(faction.promissoryNotes or {}) do
-        if mask.PROMMISSORY[eachNote] then
+        if mask.PROMISSORY[eachNote] then
           _exludeCache[source.id] = _exludeCache[source.id] or {}
           _exludeCache[source.id][color] = true
           return true
@@ -497,6 +515,12 @@ function _getEffectTargets(context, effect)
     end
 
     return false
+  end
+
+  local function objIsExcluded(source, color, objName)
+    if not source._excludes or not source._excludes[objName] then return false end
+    local col,_ = getNativeFaction(objName, source._excludes[objName])
+    return col == color
   end
 
   --params: {color = zoneColor, name = objOrAbilityName, source = source, obj = eachObj}
@@ -536,8 +560,9 @@ function _getEffectTargets(context, effect)
     --if an ability obj is in a player zone, add that player to targets
     for _,eachObj in ipairs(source._foundObjects or {}) do
       local zoneColor = _zoneHelper.zoneFromPosition(eachObj.getPosition())
-      if zoneColor then
-        documentSource({color = zoneColor, name = eachObj.getName(), source = source, obj = eachObj})
+      local oName = eachObj.getName()
+      if zoneColor and not objIsExcluded(source, zoneColor, oName) then
+        documentSource({color = zoneColor, name = oName, source = source, obj = eachObj})
       end
     end
     --if a faction has the specified ability, add that player to targets
@@ -562,7 +587,10 @@ function _getEffectTargets(context, effect)
     --if an ability obj is in a player zone, add other players to targets
     for _,eachObj in ipairs(source._foundObjects or {}) do
       local zoneColor = _zoneHelper.zoneFromPosition(eachObj.getPosition())
-      if zoneColor then addOthers(zoneColor, {name = eachObj.getName(), source = source, obj = eachObj}) end
+      local oName = eachObj.getName()
+      if zoneColor and not objIsExcluded(source, zoneColor, oName) then
+        addOthers(zoneColor, {name = oName, source = source, obj = eachObj})
+      end
     end
     --if a faction has the specified ability, add other players to targets
     for eachCol,abilities in pairs(source._activeAbilityOwners or {}) do
@@ -573,14 +601,23 @@ function _getEffectTargets(context, effect)
   end
 
   local function getTargetsFromAll(source)
-    local stackable = source.stackable and effect.stackable
-    for _,each in ipairs(allCols) do
-      for _,eachObj in ipairs(source._foundObjects or {}) do
-        documentSource({color = each, obj = eachObj, name = eachObj.getName(), source = source})
+    if source.isUniversalRule then
+      for _,each in ipairs(allCols) do
+        documentSource({color = each, source = source, name = (source.id or "").." universal rule"})
       end
-      local _abilities = source._activeAbilityOwners and source._activeAbilityOwners[each] or {}
-      for eachAbility,_ in pairs(_abilities) do
-        documentSource({color = each, name = eachAbility, source = source})
+    else
+      local stackable = source.stackable and effect.stackable
+      for _,each in ipairs(allCols) do
+        for _,eachObj in ipairs(source._foundObjects or {}) do
+          local oName  = eachObj.getName()
+          if not objIsExcluded(source, each, oName) then
+            documentSource({color = each, obj = eachObj, name = oName, source = source})
+          end
+        end
+        local _abilities = source._activeAbilityOwners and source._activeAbilityOwners[each] or {}
+        for eachAbility,_ in pairs(_abilities) do
+          documentSource({color = each, name = eachAbility, source = source})
+        end
       end
     end
   end
@@ -588,11 +625,10 @@ function _getEffectTargets(context, effect)
   local switch = {
     ["GET"] = getTargetsFromGet,
     ["OWNER"] = getTargetsFromOwner,
-    ["OTHER"] = getTargetsFromOther,
+    ["OTHERS"] = getTargetsFromOther,
     ["ALL"] = getTargetsFromAll,
-    ["catch"] = function(rule, source)
-      local errMsg = { val = source.targetType or "nil", rule = rule.id or "nil"}
-      error("Caught bad value >"..errMsg.val.."< for targetType in a source for gameEffect >"..errMsg.rule.."<")
+    ["catch"] = function(_source)
+      error("Caught bad value for targetType >".._source.targetType .."< in source >".._source.."< for gameEffect >"..effect.rule.."<")
       return
     end
   }
@@ -638,6 +674,25 @@ function tryCall(callData, params)
   local success, result = pcall(try)
   if not success then print("Failed callback: callData incorrectly formated. ", result) return end
   return result
+end
+
+local _unpackedFactions = false
+--ONLY checks UNPACKED factions, returns color, action.shortName of that faction
+function getNativeFaction(forAbility, category)
+  assert(forAbility and type(forAbility) == "string")
+  assert(category and type(category) == "string")
+  if not _unpackedFactions then Wait.frames(function() _unpackedFactions = false end, 3) end
+  _unpackedFactions = _unpackedFactions or _factionHelper.allFactions() or {}
+
+  local i,f = next(_unpackedFactions)
+  if not i then return end --no unpacked factions
+  assert(f[category], category) --passed category that does not exist in faction tables
+  for _,eachFaction in pairs(_unpackedFactions or {}) do
+    local factionValues = type(eachFaction[category]) == "table" and eachFaction[category] or {eachFaction[category]}
+    for _,eachVal in ipairs(factionValues) do
+      if eachVal == forAbility then return eachFaction.color, eachFaction.shortName or eachFaction.frankenName end
+    end
+  end
 end
 
 -------------------------------------------------------------------------------
@@ -737,29 +792,6 @@ function onObjectSpawn(object)
 end
 
 --------------------------------------------------------------------------------
-function testGetRef() end
-local effect_1 = {
-  id = "Test Effect",
-  stackable = true,
-  sources = {{
-    id = "testSources",
-    stackable = true,
-    context = {"test", "spaceCannon"},
-    --isUniversalRule = true,
-    targetType = "OWNER",
-    refs = { OBJECTS = {{name = "Antimass Deflectors", requireFaceup = true}, {name = "Claire Gibson", requireActive = true, requireFaceup = true}},
-            FACTION_ABILITIES = {"Orbital Drop", "Crafty"}
-    }
-  }}
-}
-
-function onPlayerPing(player, position)
-  local result = getActiveAbilities({context = "test", color = "White"})
-  printTable(result)
-  --printTable(_activeEffects)
-  --printTable(_gameEffects)
-end
---------------------------------------------------------------------------------
 function initEffects()
   for _,each in ipairs(CONTEXT) do
     CONTEXT[each] = true
@@ -783,7 +815,6 @@ end
 
 function onLoad(saveState)
   initEffects()
-  registerAbility(effect_1)
 
   -- Make toggle cards toggle-able.
   Wait.frames(_applyToggleActiveCards, 8)
@@ -852,7 +883,12 @@ function printTable(table)
   print("______________")
   pt(table, 0)
 end
-
+--------------------------------------------------------------------------------
+--depricated refs.GET
+--GET = {obj = self, func = "getSource"},
+--params: {context, id = "id of gameEffect", objs = _foundObjects, abilities = _activeAbilityOwners}
+--return: a "stringIdentifier" if this source is active or false
+--------------------------------------------------------------------------------
 local _lockGlobalsMetaTable = {}
 function _lockGlobalsMetaTable.__index(table, key)
     error('Accessing missing global "' .. tostring(key or '<nil>') .. '", typo?', 2)
