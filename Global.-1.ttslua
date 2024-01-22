@@ -21,6 +21,8 @@ function setPhase(phase)
   Events.invoke({event = "phaseStart", params = {phase = target, prev = prevPhase}})
 end
 
+-------------------------------------------------------------------------------
+
 --[[New getHelperClient - copy/paste into your scripts
 function getHelperClient(helperObjectName)
   --the call will error out if no object is found
@@ -38,9 +40,11 @@ local _eampleHelper = getHelperClient('TI4_EXAMPLE_HELPER')
 
 local _helpersInit = false
 local TI4_HELPER_NAMES = {
+  ['TI4_ABILITY_HELPER'] = true,
   ['TI4_BUTTON_HELPER'] = true,
   ['TI4_DECK_HELPER'] = true,
   ['TI4_DICE_HELPER'] = true,
+  ['TI4_EVENT_HELPER'] = true,
   ['TI4_EXPLORE_HELPER'] = true,
   ['TI4_FACTION_HELPER'] = true,
   ['TI4_GAME_DATA_HELPER'] = true,
@@ -54,17 +58,6 @@ local TI4_HELPER_NAMES = {
 }
 
 local function _initHelperObjects()
-  local function copyTable(t)
-      if t and type(t) == 'table' then
-          local copy = {}
-          for k, v in pairs(t) do
-              copy[k] = type(v) == 'table' and copyTable(v) or v
-          end
-          t = copy
-      end
-      return t
-  end
-  local helperNames = copyTable(TI4_HELPER_NAMES)
   local result = {} --{ ['TI4_HELPER'] = obj}
   --Get all helper objects
   for _,obj in ipairs(getAllObjects()) do
@@ -76,7 +69,7 @@ local function _initHelperObjects()
   return result
 end
 
---Stores all helper objects. No more getAllObjects() calls
+--Stores all helper objects to reduce getAllObjects() calls on first game frame
 local _helperObjects = _initHelperObjects() --_initHelperObjects()
 
 --Searches all objects for 1 helper
@@ -115,6 +108,7 @@ function newHelper(helperName, objRef)
 
   _helperObjects[helperName] = objRef
 end
+-------------------------------------------------------------------------------
 
 --For the helpers used in this scrit
 local function getHelperClient(helperName)
@@ -139,7 +133,7 @@ local function getHelperClient(helperName)
     return setmetatable({}, { __index = function(t, k) return getCallWrapper(k) end })
 end
 
---Global needs to grab its own helpers during onLoad
+--Global needs to grab its own helper references during onLoad
 local _deckHelper = nil
 local _gameDataHelper = nil
 local _factionHelper = nil

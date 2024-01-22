@@ -24,14 +24,19 @@ end
 --You can create your own events using createEvent(params). See below for details
 local events =
 {
-  ["phaseStart"] =
-  { --params = {prev = "", phase = "SETUP|DRAFT|STRATEGY|ACTION|AGENDA"}
+  ["phaseStart"] = { --params = {prev = "", phase = "SETUP|DRAFT|STRATEGY|ACTION|AGENDA"}
     defaultCallback = "onPhaseStart",
   },
-  ["phaseEnd"] =
-  { --params = {next = "", phase = "SETUP|DRAFT|STRATEGY|ACTION|AGENDA"}
+  ["phaseEnd"] = { --params = {next = "", phase = "SETUP|DRAFT|STRATEGY|ACTION|AGENDA"}
     defaultCallback = "onPhaseEnd",
   },
+
+  ["planetExplored"] = { --params: {name = "planetName", system = "system'sGUID", color = "exploringPlayer", abilities = {}, result = {[cardName] = cardGUID} }
+    defaultCallback = "onPlanetExplored",
+  },
+  ["frontierExplored"] = {--params: {system = "system'sGUID", color = "exploringPlayer", tokenPos = {vector}, abilities = {}, result = {[cardName] = cardGUID}}
+    defaultCallback = "onFrontierExplored"
+  }
 }
 
 local _workingEvents = {}--{[eventName] = co}

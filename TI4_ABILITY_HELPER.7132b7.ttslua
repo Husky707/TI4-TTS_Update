@@ -18,7 +18,7 @@ local _toggleUpdate = false
 
 -- abilities are what enable players to use gameEffects. Abilities are used within a CONTEXT
 local CONTEXT = { --converted to table indexed by value during load: ["context"] = true
-  "test", "unitAbilities", "commodities", "adjacency", "draw_actionCard", "draw_..."
+  "Frontier Exploration", "Planet Exploration", "commodities", "adjacency", "draw_actionCard", "draw_..."
 }
 local _gameEffects = {
 }
@@ -62,16 +62,15 @@ end
 }--]]
 function getActiveAbilities(params)
   assert(params and type(params) == "table")
-  assert(params.context and CONTEXT[params.context])
+  assert(params.context and CONTEXT[params.context], (params.context or "nil").." is not a registered ability context.")
   _gatherSourceObjs()
 
-  if not params.forceUpdate and _activeEffects[params.context] then
-    return not params.color and _activeEffects[params.context] or _activeEffects[params.context][params.color] or {}
+  if params.forceUpdate or not _activeEffects[params.context] then
+    _getActiveSources(params.context)
+    _getActiveEffects(params.context)
+    Wait.frames(function() _activeEffects[params.context] = nil end, 1)
   end
-  Wait.frames(function() _activeEffects[params.context] = nil end, 1)
-  _getActiveSources(params.context)
-  _getActiveEffects(params.context)
-  return not params.color and _activeEffects[params.context] or _activeEffects[params.context][params.color] or {}
+  return not params.color and copyTable(_activeEffects[params.context]) or copyTable(_activeEffects[params.context][params.color]) or {}
 end
 
 --params = objRef or {obj = objRef}
@@ -110,6 +109,7 @@ local customGameEffect = {
   --An effects may have multiple different sources; think of a source as an ability that is in play that grants the effect
   sources = {
     {
+      id = "Name of Source",
       context = "", -- "" or {table strings}; See CONTEXT for available names
       isUniversalRule = false, --Is this rule allways in play (within context)? --tardetType must be ALL or GET
       stackable = true, --can this source stack with itself to apply multiple times?
@@ -800,7 +800,6 @@ function initEffects()
     each._hasContext = each._hasContext or {}
 
     for id,eachSource in ipairs(each.sources or {}) do
-      eachSource.id = id
       eachSource.isActive = false
       eachSource._foundObjects = {}
       eachSource._activeAbilityOwners = {}

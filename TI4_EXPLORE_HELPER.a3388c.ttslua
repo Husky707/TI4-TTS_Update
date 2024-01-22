@@ -15,6 +15,8 @@ local _systemHelper = getHelperClient('TI4_SYSTEM_HELPER')
 local _deckHelper = getHelperClient('TI4_DECK_HELPER')
 local _unitHelper = getHelperClient('TI4_UNIT_HELPER')
 local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
+local _abilityHelper = getHelperClient('TI4_ABILITY_HELPER')
+local Events = getHelperClient('TI4_EVENT_HELPER')
 
 local function copyTable(t)
     if t and type(t) == 'table' then
@@ -262,6 +264,58 @@ local _anomalyTokens = {
   }
 }
 
+local _exploreAbilities = {
+  ["drawAdditionalWithMech"] = {
+    id = "drawAdditionalWithMech",
+    displayName = "Distant Suns",
+    stackable = false,
+    sources = {
+      { id = "Distant Suns Exploration",
+        context = "Planet Exploration",
+        targetType = "OWNER",
+        refs = {OBJECTS = { --since Distant Suns is an OPTIONAL faction ability, reperesent it with an object that can be toggledActive
+          {name = "Distant Suns Exploration", requireActive = true, requireFaceup = true}
+        }}
+      },
+    },
+  },
+  ["readyExplores"] = {
+    id = "readyExplores",
+    displayName = "Ready Explored Planets",
+    stackable = false,
+    sources = {
+       id = "Pre-Fab Arcologies",
+        context = "Planet Exploration",
+        refs = {OBJECTS = "Pre-Fab Arcologies"},
+        targetType = "OWNER"
+
+    },
+  },
+}
+
+function _resolveDistantSuns(exploreData, applyCount)
+  if not exploreData or not exploreData.planetName then return end
+  local mName = exploreData.color and exploreData.color.. " Mech" or false
+  if not mName then return end
+  for _,eachObj in ipairs(getAllObjects()) do
+    if eachObj.getName() == mName then
+      local pos = eachObj.getPosition()
+      local _system = _systemHelper.systemFromPosition(pos)
+      if _system then
+        local onPlanet = _systemHelper.planetFromPosition({systemGuid = _system.guid, position = pos, exact = true})
+        if onPlanet and onPlanet.name == exploreData.planetName then
+          exploreData.drawCount = exploreData.drawCount + 1
+          return exploreData
+        end
+      end
+    end
+  end
+end
+
+local _applyExploreAbilities = {
+  ["drawAdditionalWithMech"] = _resolveDistantSuns,
+  ["readyExplores"] = function() end--resolved during onPlanetExplored event
+}
 
 --Injection---------------------------------------------------------------------
 
@@ -475,6 +529,8 @@ function onLoad(saveState)
     end
 
     Wait.frames(delayedAdd, 11)
+
+    _registerExploreAbilities()
 end
 
 function onObjectSpawn(object)
@@ -587,12 +643,12 @@ function applyExplorationGoodness(object)
     local objName = object.getName()
     if _tokenPlanets[objName] then
       local planetName = _tokenPlanets[objName].planetData.name or objName
-      local function exploreTokenPlanet()
+      local function exploreTokenPlanet(player_color, position, object)
           -- System tile has correct data when Mirage dropped there, but
           -- since Mirage can move re-find system when asked to explore.
           local system = _systemHelper.systemFromPosition(object.getPosition())
           if system then
-              explorePlanet(system.guid, planetName)
+              explorePlanet(system.guid, planetName, player_color)
           else
               printToAll(planetName ..' not attached to a system, cannot explore', 'Red')
           end
@@ -607,7 +663,7 @@ function applyExplorationGoodness(object)
       end
       object.addContextMenuItem("Move " .. planetName, prepMove)
     elseif objName == 'Titan Note Token' then
-        local function exploreTitanNoteToken(traitOverride)
+        local function exploreTitanNoteToken(exploringPlayer, traitOverride)
             local system = _systemHelper.systemFromPosition(object.getPosition())
             local planet = system and _systemHelper.planetFromPosition({
                 systemGuid = system.guid,
@@ -617,21 +673,21 @@ function applyExplorationGoodness(object)
             if planet then
                 local capitalized = string.gsub(traitOverride, "^%l", string.upper)
                 printToAll('Titan Note Token using ' .. capitalized, 'Yellow')
-                explorePlanet(system.guid, planet.name, traitOverride)
+                explorePlanet(system.guid, planet.name, exploringPlayer, traitOverride)
             else
                 printToAll('Titan Note Token not attached to a planet, cannot explore', 'Red')
             end
         end
-        object.addContextMenuItem('Explore Cultural', function() exploreTitanNoteToken('cultural') end)
-        object.addContextMenuItem('Explore Hazardous', function() exploreTitanNoteToken('hazardous') end)
-        object.addContextMenuItem('Explore Industrial', function() exploreTitanNoteToken('industrial') end)
+        object.addContextMenuItem('Explore Cultural', function(clickingPlayer) exploreTitanNoteToken(clickingPlayer,'cultural') end)
+        object.addContextMenuItem('Explore Hazardous', function(clickingPlayer) exploreTitanNoteToken(clickingPlayer,'hazardous') end)
+        object.addContextMenuItem('Explore Industrial', function(clickingPlayer) exploreTitanNoteToken(clickingPlayer,'industrial') end)
     else
         local systemList = _systemHelper.systems()
         local planetList = systemList[object.getGUID()].planets
         if planetList ~= nil then
             for i, planet in ipairs(planetList) do
                 if planet.trait ~= nil then
-                    object.addContextMenuItem('Explore ' .. planet.name, function() explorePlanet(object.getGUID(), planet.name) end, false)
+                    object.addContextMenuItem('Explore ' .. planet.name, function(clickingPlayer) explorePlanet(object.getGUID(), planet.name, clickingPlayer) end, false)
                 end
             end
         end
@@ -640,17 +696,15 @@ end
 
 function applyFrontierGoodness(object)
     assert(type(object) == 'userdata')
-    object.addContextMenuItem('Explore Frontier', function() exploreFrontier(object) end, false)
+    object.addContextMenuItem('Explore Frontier', function(playerColor) exploreFrontier(object, playerColor) end, false)
 end
 
-function explorePlanet(tileGUID, planetName, traitOverride)
-    local systemList = _systemHelper.systems()
+local _planetExploreCoru = {}
+function explorePlanet(tileGUID, planetName, exploringColor, traitOverride)
+    local system = assert(_systemHelper.systemFromGuid(tileGUID))
     local planetTrait = false
     local deckType = false
-    local tile = false
-    local tilePos = false
     local planetPos = false
-    local tileRot = false
 
     local traitMap = {
         ['cultural'] = 'Cultural Exploration',
@@ -658,13 +712,13 @@ function explorePlanet(tileGUID, planetName, traitOverride)
         ['industrial'] = 'Industrial Exploration'
     }
 
-    for i, planet in ipairs(systemList[tileGUID].planets or {}) do
+    for i, planet in ipairs(system.planets or {}) do
         if planet.name == planetName then
             planetTrait = planet.trait
-            planetPos = planet.position
+            planetPos = copyTable(planet.position)
         end
     end
-    if not planetTrait then
+    if not planetTrait and not traitOverride then
         -- Stellar Converter can remove a planet but the tile might still have an explore option.
         printToAll('ERROR: Planet ' .. planetName .. ' has no trait.', 'Red')
         return
@@ -678,20 +732,55 @@ function explorePlanet(tileGUID, planetName, traitOverride)
     deckType = traitMap[planetTrait]
     assert(deckType)
 
-    local tile = assert(getObjectFromGUID(tileGUID))
-    local tilePos = tile.getPosition()
-    local tileRot = tile.getRotation()
+    local _activeExploreAbilities = exploringColor and _abilityHelper.getActiveAbilities({context = "Planet Exploration", color = exploringColor}) or {}
+    local exploreParams = {
+      planetName = planetName,
+      planetPos = planetPos,
+      trait = planetTrait,
+      deckType = deckType,
+      color = exploringColor,
+      system = tileGUID,
+      abilities = _activeExploreAbilities,
+      drawCount = 1,
+      preventExplore = false
+    }
+    for eachAbility,data in pairs(_activeExploreAbilities) do
+      if _exploreAbilities[eachAbility] then
+        local tryApply = _applyExploreAbilities[eachAbility] and _applyExploreAbilities[eachAbility](copyTable(exploreParams), data.count)
+        exploreParams = tryApply and copyTable(tryApply) or exploreParams
+      end
+    end
+    if exploreParams.preventExplore then
+      local preventer = type(exploreParams.preventExplore) == "string" and exploreParams.preventExplore or "an ability"
+      pcall(broadcastToAll('The exploration of '..exploreParams.planetName.." was prevented by "..preventer, 'Red'))
+      return
+    end
+    --else
+    table.insert(_planetExploreCoru, exploreParams)
+    startLuaCoroutine(self, "_resolvePlanetExploreCoru")
+end
 
-    local exploreDeckGuid = _deckHelper.getDeckWithReshuffle(deckType)
+function _resolvePlanetExploreCoru()
+  local params = assert(table.remove(_planetExploreCoru, 1))
+
+  local _results = {}
+  local _printResults = {}
+  for i = 1, params.drawCount, 1 do
+    local exploreDeckGuid = _deckHelper.getDeckWithReshuffle(params.deckType)
     if not exploreDeckGuid then
-        printToAll('ERROR: Unable to locate ' .. deckType .. ' deck.', 'Red')
+        printToAll('ERROR: Unable to locate ' .. params.deckType .. ' deck.', 'Red')
         return
     end
     local exploreDeck = assert(getObjectFromGUID(exploreDeckGuid))
 
-    planetPos.y = 0
-    local position = tile.positionToWorld(planetPos)
+    local tile = assert(getObjectFromGUID(params.system))
+    local tilePos = tile.getPosition()
+    local tileRot = tile.getRotation()
+
+    params.planetPos.y = 0
+    local position = tile.positionToWorld(params.planetPos)
     position.y = position.y + 3
+    position.x = position.x + ((i -1) * 1.45)--offset if drawing multiple cards
     local rotation = { x = 0, y = tileRot.y, z = 0 }
 
     local card = false
@@ -699,27 +788,84 @@ function explorePlanet(tileGUID, planetName, traitOverride)
         card = exploreDeck.takeObject({
           position = position,
           rotation = rotation,
-          callback_function = function(obj) checkCardForToken(obj, planetName) end,
+          callback_function = function(obj) checkCardForToken(obj, params.planetName) end,
           smooth = true
         })
+        while card.spawning do
+          coroutine.yield(0)
+        end
+        table.insert(_printResults, card.getName())
+        _results[card.getName()] = card.getGUID()
     elseif exploreDeck.tag == 'Card' then
         card = exploreDeck
         local collide = false
         local fast = true
         card.setPositionSmooth(position, collide, fast)
         card.setRotationSmooth(rotation, collide, fast)
+        table.insert(_printResults, card.getName())
+        _results[card.getName()] = card.getGUID()
     else
-        error('exploreFrontier: bad "' .. deckType .. '" deck')
+        error('exploreFrontier: bad "' .. params.deckType .. '" deck')
     end
-    broadcastToAll('Exploring ' .. planetName .. ': ' .. card.getName(), 'Yellow')
+    coroutine.yield(0) coroutine.yield(0)
+    coroutine.yield(0) coroutine.yield(0)
+    coroutine.yield(0) coroutine.yield(0)
+    coroutine.yield(0) coroutine.yield(0)
+  end
+
+  broadcastToAll('Exploring ' .. params.planetName .. ': ' .. table.concat(_printResults, ", "), 'Yellow')
+  Events.invoke({event = "planetExplored", params = {
+    planetName = params.planetName,
+    trait = params.planetTrait,
+    color = params.color,
+    system = params.system,
+    abilities = params.abilities,
+    result = _results
+  }})
+  return 1
 end
 
-function exploreFrontier(token)
+local _frontierExploreCoru = {}
+function exploreFrontier(token, exploringColor)
     assert(type(token) == 'userdata')
 
-    local tokenPos = token.getPosition()
-    local tokenRot = token.getRotation()
+    local tPos = token.getPosition()
+    local _activeExploreAbilities = exploringColor and _abilityHelper.getActiveAbilities({context = "Frontier Exploration", color = exploringColor}) or {}
+    local exploreParams = {
+      token = token,
+      tokenPos = tPos,
+      system = _systemHelper.systemFromPosition(tPos),
+      color = exploringColor,
+      abilities = _activeExploreAbilities,
+      drawCount = 1,
+      returnToken = true,
+      preventExplore = false
+    }
 
+    for eachAbility,data in pairs(_activeExploreAbilities) do
+      if _exploreAbilities[eachAbility] then
+        local tryApply = _applyExploreAbilities[eachAbility] and _applyExploreAbilities[eachAbility](copyTable(exploreParams), data.count)
+        exploreParams = tryApply and copyTable(tryApply) or exploreParams
+      end
+    end
+    if exploreParams.preventExplore then
+      local preventer = type(exploreParams.preventExplore) == "string" and exploreParams.preventExplore or "an ability"
+      pcall(broadcastToAll('Frontier exploration was prevented by '..preventer, 'Red'))
+      return
+    end
+    --else
+
+    table.insert(_frontierExploreCoru, exploreParams)
+    startLuaCoroutine(self, "_resolveFrontierExploreCoru")
+end
+
+function _resolveFrontierExploreCoru()
+  local params = assert(table.remove(_frontierExploreCoru, 1))
+  local tokenPos = assert(params.tokenPos)
+  local _results = {}
+  local _printResults = {}
+
+  for i = 1, (params.drawCount or 1), 1 do
     local frontierDeckGuid = _deckHelper.getDeckWithReshuffle('Frontier Exploration')
     if not frontierDeckGuid then
         printToAll('ERROR: Unable to locate "Frontier Exploration" deck.', 'Red')
@@ -727,9 +873,9 @@ function exploreFrontier(token)
     end
     local frontierDeck = assert(getObjectFromGUID(frontierDeckGuid))
 
-    local position = { x = tokenPos.x, y = tokenPos.y + 3, z = tokenPos.z }
+    local position = { x = tokenPos.x + ((i-1)*1.45), y = tokenPos.y + 3, z = tokenPos.z }
     local rotation = { x = 0, y = 0, z = 0 }
-    local system = _systemHelper.systemFromPosition(tokenPos)
+    local system = params.system
     local systemObject = system and getObjectFromGUID(system.guid)
     if systemObject then
         rotation.y = systemObject.getRotation().y
@@ -743,20 +889,43 @@ function exploreFrontier(token)
             callback_function = function(obj) checkCardForToken(obj, false) end,
             smooth = true
         })
+        while(card.spawning) do
+          coroutine.yield(0)
+        end
+        table.insert(_printResults, card.getName())
+        _results[card.getName()] = card.getGUID()
     elseif frontierDeck.tag == 'Card' then
         card = frontierDeck
         local collide = false
         local fast = true
         card.setPositionSmooth(position, collide, fast)
         card.setRotationSmooth(rotation, collide, fast)
+        table.insert(_printResults, card.getName())
+        _results[card.getName()] = card.getGUID()
+        coroutine.yield(0)
     else
         error('exploreFrontier: bad "Frontier Exploration" deck')
     end
+    coroutine.yield(0) coroutine.yield(0)
+    coroutine.yield(0) coroutine.yield(0)
+    coroutine.yield(0) coroutine.yield(0)
+    coroutine.yield(0) coroutine.yield(0)
+  end
 
+  if params.returnToken then
     local frontierTokenBag = assert(_getByName('Frontier Tokens Bag', 'Infinite'))
-    frontierTokenBag.putObject(token)
+    frontierTokenBag.putObject(params.token)
+  end
 
-    broadcastToAll('Exploring Frontier: ' .. card.getName(), 'Yellow')
+  broadcastToAll('Exploring Frontier: ' .. table.concat(_printResults, ", "), 'Yellow')
+  Events.invoke({event = "frontierExplored", params = {
+    color = params.color,
+    system = params.system and params.system.guid,
+    abilities = params.abilities,
+    result = _results,
+    tokenPos = params.tokenPos
+  }})
+  return 1
 end
 
 function checkCardForToken(object_spawned, planetName)
@@ -867,6 +1036,34 @@ function _getByName(name, tag)
     error('_getByName: missing "' .. name .. '"')
 end
 
+function _registerExploreAbilities()
+  for _,each in pairs(_exploreAbilities) do
+    _abilityHelper.registerAbility(each)
+  end
+
+  Events.addListener({eventName = "planetExplored", objGUID = self.getGUID()})
+end
+
+--Event callback from TI4_EVENT_HELPER (Used here to resolve Pre-Fab Arcologies)
+function onPlanetExplored(params)
+  params = params or {}
+  --printTable(params)--uncomment to take a look at the data recieved from this event
+
+  --maybe ready planet due to Pre-Fab Arcologies
+  if params.planetName and params.abilities and params.abilities["readyExplores"] then
+    for _,eachObj in ipairs(getAllObjects()) do
+      if eachObj.getName() == params.planetName then
+        if eachObj.is_face_down then
+          eachObj.flip()
+          --get the name of the source of this effect to print to players
+          local source,_ = next(params.abilities["readyExplores"].sources or {})--ability names are keys, only need to mention one, so grab next()
+          source = source and " ("..source..")." or "."--formatTxt
+          printToAll(params.planetName.." has been readied".. source,"Teal")
+        end
+      end
+    end
+  end
+end
 -------------------------------------------------------------------------------
 
 -- Default position is slightly right of center
