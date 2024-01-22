@@ -75,7 +75,7 @@ local Coru = {
 
 --[[params:
     eventName = string name of target event,
-    objGUID = guid of the listening object that contains the callback function, object must exist when it is registered
+    objGUID = guid of the listening object that contains the callback function
     callback = *optional- string name of callback function. Defaults to "on" .. EventName ex: turnStart -> onTurnStart (notice capitalization!!)--]]
     --p: ({eventName, objGUID, callback})
 function addListener(params)
@@ -87,13 +87,11 @@ function addListener(params)
   local guid = params.objGUID
   local obj = getObjectFromGUID(guid)
   assert(event, params.eventName .. " is not a registered event.")
-  assert(obj, "To listen to an event, you must provide the valid guid of an existing listening object")
 
   local currentListeners = event.listeners or {}
-  if currentListeners[guid] then return false end--prevent listener douplication
   --determine callback function
   local cb = params.callback or event.defaultCallback
-  currentListeners[guid] = { listenObject = obj, callback = cb }
+  currentListeners[guid] = { listenObject = obj, callback = cb, guid = params.objGUID}
   event.listeners = currentListeners
 
   --print(obj.getName() .. " is listening to " .. params.eventName)
@@ -125,25 +123,11 @@ function invoke(params)
 
   --call events. Mark nil objects for removal
   --print("Invoking " .. params.event .. ".")
-  local function tryCall(callData)
-    local function try()
-      assert(callData and type(callData) == "table")
-      assert(callData.listenObject ~= nil and type(callData.listenObject) == "userdata")
-      assert(callData.callback and type(callData.callback) == "string" and callData.listenObject.getVar(callData.callback), 'missing ' .. callData.listenObject.getName() .. '.' .. callData.callback)
-
-      return callData.listenObject.call(callData.callback, params.params)
-    end
-    local success, result = pcall(try)
-    if not success then
-      --print("Failed callback: callData incorrectly formated. ", result)
-      return
-    end
-    return result
-  end
   local nilObjs = {}
   for id,each in pairs(listeners) do
+    each.listenObject = each.listenObject ~= nil and each.listenObject or getObjectFromGUID(each.guid)
     if each.listenObject ~= nil then
-      tryCall(each)
+      tryCall(each, params.params)
     else
       table.insert(nilObjs, id)
     end
@@ -161,7 +145,7 @@ function invokeAsync(params)
   assert(params.event and type(params.event) == 'string')
   assert(events[params.event], "Failed to invoke: Event >"..params.event.."<  is not registered.")
   if _workingEvents[params.event] then
-    return false, "already invoking."
+    return false, "already invoking"
   end
   _workingEvents[params.event] = true
 
@@ -169,28 +153,13 @@ function invokeAsync(params)
   if not next(listeners) then return true end
 
   local _co = coroutine.create(function()
-    local nilObjs = {}
-    local function tryCall(callData)
-      local function try()
-        assert(callData and type(callData) == "table")
-        assert(callData.listenObject ~= nil and type(callData.listenObject) == "userdata")
-        assert(callData.callback and type(callData.callback) == "string" and callData.listenObject.getVar(callData.callback), 'missing ' .. callData.listenObject.getName() .. '.' .. callData.callback)
-
-        return callData.listenObject.call(callData.callback, params.params)
-      end
-      local success, result = pcall(try)
-      if not success then
-        --print("Failed callback: callData incorrectly formated. ", result)
-        return
-      end
-      return result
-    end
-
-    --call events. Mark nil objects for removal
     --print("Invoking " .. params.event .. ".")
+    --call events. Mark nil objects for removal
+    local nilObjs = {}
     for id,each in pairs(listeners) do
+      each.listenObject = each.listenObject ~= nil and each.listenObject or getObjectFromGUID(each.guid)
       if each.listenObject ~= nil then
-        tryCall(each)
+        tryCall(each, params.params)
         coroutine.yield(0)
       else
         table.insert(nilObjs, id)
@@ -225,6 +194,24 @@ function createEvent(params)
   --print("Event created: " .. params.eventName  .. " calls>" .. callback .."<")
   events[params.eventName] = { listeners = {}, defaultCallback = callback}
   return true
+end
+
+-------------------------------------------------------------------------------
+function tryCall(callData, params)
+  local function try()
+    assert(callData and type(callData) == "table")
+    local callObj = callData.listenObject ~= nil and callData.listenObject or getObjectFromGUID(callData.guid)
+    assert(callObj ~= nil)
+    assert(callData.callback and type(callData.callback) == "string" and callObj.getVar(callData.callback), 'missing ' .. callObj.getName() .. '.' .. callData.callback)
+
+    return callObj.call(callData.callback, params)
+  end
+  local success, result = pcall(try)
+  if not success then
+    --print("Failed callback: callData incorrectly formated. ", result)
+    return
+  end
+  return result
 end
 
 -------------------------------------------------------------------------------

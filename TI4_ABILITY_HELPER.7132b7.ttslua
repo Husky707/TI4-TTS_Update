@@ -1,4 +1,12 @@
 
+local function _hash(t)
+  local h = {}
+  for _,each in ipairs(t) do
+    h[each] = true
+  end
+  return h
+end
+
 function getHelperClient(helperObjectName)
     local helperObject = Global.call('getHelper', helperObjectName)
     local function getCallWrapper(functionName)
@@ -20,6 +28,7 @@ local _toggleUpdate = false
 local CONTEXT = { --converted to table indexed by value during load: ["context"] = true
   "Frontier Exploration", "Planet Exploration", "commodities", "adjacency", "draw_actionCard", "draw_..."
 }
+CONTEXT = _hash(CONTEXT)
 local _gameEffects = {
 }
 
@@ -159,6 +168,9 @@ local customGameEffect = {
 function registerAbility(newEffect)
   assert(newEffect.id, "Game effects must have a unique ID,")
   assert(newEffect.sources == nil or type(newEffect.sources) == "table")
+  local _silentInjection = newEffect.silent
+  newEffect.silent = nil
+
   local _sources = not newEffect.sources and {} or newEffect.sources[1] and newEffect.sources or {newEffect.sources} --convert to table of sources
   _sources = copyTable(_sources)
   local validSources = {}
@@ -181,7 +193,7 @@ function registerAbility(newEffect)
     _hasContext = contexts,
     sources = validSources
   }
-  _reportInjection(newEffect.id)
+  if not _silentInjection then _reportInjection(newEffect.id) end
 end
 
 --[[params: {

@@ -16,7 +16,7 @@ local _deckHelper = getHelperClient('TI4_DECK_HELPER')
 local _unitHelper = getHelperClient('TI4_UNIT_HELPER')
 local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
 local _abilityHelper = getHelperClient('TI4_ABILITY_HELPER')
-local Events = getHelperClient('TI4_EVENT_HELPER')
+local Events = getHelperClient('TI4_EVENT_HELPER') --Invokes: onFrontierExplored, onPlanetExplored
 
 local function copyTable(t)
     if t and type(t) == 'table' then
@@ -229,13 +229,12 @@ local _tokenPlanets = {
     }
   },
 }
---planetCount (after adding token) to position
-local _tokenPlanetPositions = {
+local _tokenPlanetPositions = { --[key] = planetCount after adding token to system
   [1] = { -- move further out for less overlap with center-tile wormholes
       x = 0.9, -- standard is 0.47,
       z = -1.1, -- standard is -0.81
   },
-  [2] = { -- same as [0]
+  [2] = {
       x = -1.86 * 0.8,
       z = -0.26 * 0.8,
   },
@@ -250,7 +249,7 @@ local _tokenPlanetPositions = {
   [5] = { -- Getting crowded here isnt it...
       x = 1.18 *0.9,
       z = 1.52 *0.9,
-  },
+  },--systems capped at 5 planets. Cap is respected/enforced in other scripts
 }
 
 local _anomalyTokens = {
@@ -278,6 +277,7 @@ local _exploreAbilities = {
         }}
       },
     },
+    apply = {obj = self, func = "_resolveDistantSuns", guid = self.getGUID()}
   },
   ["readyExplores"] = {
     id = "readyExplores",
@@ -288,12 +288,13 @@ local _exploreAbilities = {
         context = "Planet Exploration",
         refs = {OBJECTS = "Pre-Fab Arcologies"},
         targetType = "OWNER"
-
     },
   },
 }
 
-function _resolveDistantSuns(exploreData, applyCount)
+--expected params: {data = exploreData, applyCount = #} see func explorePlanet() for exploreData format
+function _resolveDistantSuns(params)
+  local exploreData = assert(params.data, "Did not recieve expected params format in >_resolveDistantSuns<")
   if not exploreData or not exploreData.planetName then return end
   local mName = exploreData.color and exploreData.color.. " Mech" or false
   if not mName then return end
@@ -311,11 +312,6 @@ function _resolveDistantSuns(exploreData, applyCount)
     end
   end
 end
-
-local _applyExploreAbilities = {
-  ["drawAdditionalWithMech"] = _resolveDistantSuns,
-  ["readyExplores"] = function() end--resolved during onPlanetExplored event
-}
 
 --Injection---------------------------------------------------------------------
 
@@ -455,6 +451,28 @@ function injectAnomalyToken(params)
     end
     table.insert(attach.pull, params.tokenName)
   end
+end
+
+--[[Create a new exploration ability
+params: newAbility uses the format documented in the TI4_ABILITY_HELPER, but adds an optional apply field that modifies the exploration
+CONTEXT: Exploration uses the contexts: "Planet Exploration" and "Frontier Exploration"
+         Each source in newAbility.sources should have context = "Planet Exploration"|"Frontier Exploration"|{"Planet Exploration","Frontier Exploration"}
+apply = {guid = "", callback = "yourFunctionName"}
+apply params: {data = {explorationData}, applyCount = # (how many times to apply the effects)}
+                --see explorePlanet() and exploreFrontier() for full explorationData contents
+apply return: Modify params.data directly and return it. Return false or nil if the apply has no effect
+      useful modifications: data.drawCount = #, data.preventExplore (set to true or "YourAbilityName" to stop the expore)--]]
+function injectExplorationAbility(newAbility)
+  _abilityHelper.registerAbility(newAbility)
+  _exploreAbilities[newAbility.id] = newAbility
+end
+
+--[[Add a new ability source that triggers an existing game effect
+  See TI4_ABILITY_HELPER for newSource format (be sure to include the approriate context)--]]
+function injectExplorationAbilitySource(newSource)
+  assert(newSource.context and type(newSource.context) =="table" or newSource.context == "Frontier Exploration" or newSource.context == "Planet Exploration",
+    "Exploration abilities require the \'Planet Exploration\' or \'Frontier Exploration\' context (or {both})")
+  _abilityHelper.injectAbilitySource(newSource)
 end
 
 -------------------------------------------------------------------------------
@@ -744,18 +762,40 @@ function explorePlanet(tileGUID, planetName, exploringColor, traitOverride)
       drawCount = 1,
       preventExplore = false
     }
+    local _printApplied = {"Used:"}
     for eachAbility,data in pairs(_activeExploreAbilities) do
-      if _exploreAbilities[eachAbility] then
-        local tryApply = _applyExploreAbilities[eachAbility] and _applyExploreAbilities[eachAbility](copyTable(exploreParams), data.count)
-        exploreParams = tryApply and copyTable(tryApply) or exploreParams
+      if _exploreAbilities[eachAbility] and _exploreAbilities[eachAbility].apply then
+        local function tryApply(callData, applyCount)
+          assert(callData and type(callData) == "table")
+          local callObj = callData.obj ~= nil and callData.obj or callData.guid and getObjectFromGUID(callData.guid)
+          if not callObj then return end
+          callData.obj = callObj
+          if callObj == self then
+            local func = assert(self.getVar(callData.func), callData.func .. " is not a function of TI4_EXPLORE_HELPER")
+            return func({data = exploreParams, applyCount = applyCount or 1})--modify the table directly from reference
+          else
+            assert(callObj.getVar(callData.func), callData.func .." is not a function of "..callObj.getName())
+            local result = callObj.call(callData.func, {data = copyTable(params), applyCount = applyCount or 1})
+            if result then exploreParams = copyTable(result) return true end --cannot modify tables cross object, send copy, then override with result
+          end
+        end
+        local success, resultOrErr = pcall(tryApply, _exploreAbilities[eachAbility].apply, data.count)
+        if not success then print(resultOrErr)
+        elseif resultOrErr then
+          for eachSource,_ in pairs(data.sources or {}) do
+            table.insert(_printApplied, eachSource)
+          end
+        end
       end
     end
     if exploreParams.preventExplore then
       local preventer = type(exploreParams.preventExplore) == "string" and exploreParams.preventExplore or "an ability"
-      pcall(broadcastToAll('The exploration of '..exploreParams.planetName.." was prevented by "..preventer, 'Red'))
+      broadcastToAll('The exploration of '..exploreParams.planetName.." was prevented by "..preventer, 'Red')
       return
     end
     --else
+
+    exploreParams._printApplied = _printApplied
     table.insert(_planetExploreCoru, exploreParams)
     startLuaCoroutine(self, "_resolvePlanetExploreCoru")
 end
@@ -814,6 +854,10 @@ function _resolvePlanetExploreCoru()
   end
 
   broadcastToAll('Exploring ' .. params.planetName .. ': ' .. table.concat(_printResults, ", "), 'Yellow')
+  if params._printApplied and params._printApplied[2] then
+    local spacer = #params._printApplied > 2 and ", " or " "
+    printToAll(table.concat(params._printApplied, spacer), params.color or "White")
+  end
   Events.invoke({event = "planetExplored", params = {
     planetName = params.planetName,
     trait = params.planetTrait,
@@ -842,19 +886,41 @@ function exploreFrontier(token, exploringColor)
       preventExplore = false
     }
 
+    local _printApplied = {"Used:"}
     for eachAbility,data in pairs(_activeExploreAbilities) do
-      if _exploreAbilities[eachAbility] then
-        local tryApply = _applyExploreAbilities[eachAbility] and _applyExploreAbilities[eachAbility](copyTable(exploreParams), data.count)
-        exploreParams = tryApply and copyTable(tryApply) or exploreParams
+      if _exploreAbilities[eachAbility] and _exploreAbilities[eachAbility].apply then
+        local function tryApply(callData, applyCount)
+          assert(callData and type(callData) == "table")
+          local callObj = callData.obj ~= nil and callData.obj or callData.guid and getObjectFromGUID(callData.guid)
+          if not callObj then return end
+          callData.obj = callObj
+
+          if callObj == self then
+            local func = assert(self.getVar(callData.func), callData.func .. " is not a function of TI4_EXPLORE_HELPER")
+            return func({data = exploreParams, applyCount = applyCount or 1})--modify the table directly from reference
+          else
+            assert(callObj.getVar(callData.func), callData.func .." is not a function of "..callObj.getName())
+            local result = callObj.call(callData.func, {data = copyTable(params), applyCount = applyCount or 1})
+            if result then exploreParams = copyTable(result) return true end --cannot modify tables cross object, send copy, then override with result
+          end
+        end
+        local success, resultOrErr = pcall(tryApply, _exploreAbilities[eachAbility].apply, data.count)
+        if not success then print(resultOrErr)
+        elseif resultOrErr then
+          for eachSource,_ in pairs(data.sources or {}) do
+            table.insert(_printApplied, eachSource)
+          end
+        end
       end
     end
+
     if exploreParams.preventExplore then
       local preventer = type(exploreParams.preventExplore) == "string" and exploreParams.preventExplore or "an ability"
       pcall(broadcastToAll('Frontier exploration was prevented by '..preventer, 'Red'))
       return
     end
     --else
-
+    exploreParams._printApplied = _printApplied
     table.insert(_frontierExploreCoru, exploreParams)
     startLuaCoroutine(self, "_resolveFrontierExploreCoru")
 end
@@ -918,6 +984,10 @@ function _resolveFrontierExploreCoru()
   end
 
   broadcastToAll('Exploring Frontier: ' .. table.concat(_printResults, ", "), 'Yellow')
+  if params._printApplied and params._printApplied[2] then
+    local spacer = #params._printApplied > 2 and ", " or " "
+    printToAll(table.concat(params._printApplied, spacer), params.color or "White")
+  end
   Events.invoke({event = "frontierExplored", params = {
     color = params.color,
     system = params.system and params.system.guid,
@@ -1038,6 +1108,7 @@ end
 
 function _registerExploreAbilities()
   for _,each in pairs(_exploreAbilities) do
+    each.silent = true
     _abilityHelper.registerAbility(each)
   end
 
