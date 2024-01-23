@@ -35,7 +35,9 @@ local function copyTable(t)
     return t
 end
 
+local _abilityHelper = getHelperClient('TI4_ABILITY_HELPER')
 local _deckHelper = getHelperClient('TI4_DECK_HELPER')
+--local _eliminationHelper = getHelperClient('TI4_ELIMINATION_HELPER')
 local _factionHelper = getHelperClient('TI4_FACTION_HELPER')
 local _systemHelper = getHelperClient('TI4_SYSTEM_HELPER')
 local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
@@ -72,11 +74,44 @@ local _allocatedTokenGuidToColor = {}  -- unassigned command tokens
 local _putTokenGuidSet = {}
 
 local _doNotReadySet = {}
+local _skipReadySet = {}--skips only the NEXT ready, not all future readies
+local _customRepairables = {names = {}, guids = {}}
+local _nonRepairables = {names = {}, guids = {}}
+local _skipRepairs = {names = {}, guids = {}}
 
+---Injection--------------------------------------------------------------------
+
+--These cards will NEVER be readied during the status phase(not undo-able)
 function injectDoNotReady(cardName)
     assert(type(cardName) == 'string')
     _doNotReadySet[cardName] = true
 end
+
+--The next time cards are readied during the status phase, these cards will not be
+function injectSkipReady(cardName)
+  assert(type(cardName) == 'string')
+  _skipReadySet[cardName] = true
+end
+
+--params: {name = ""or table of {"names"}, guid = "" or table of {"guids"}}
+--use names to repair all units with that name or guids to repair only specific objects
+function injectRepairable(params)
+  _injectRepair(_customRepairables, params)
+end
+
+--The next time units are repaired during the status phase, these units are not repaired
+--params: {name = ""or table of {"names"}, guid = "" or table of {"guids"}}
+function injectSkipRepair(params)
+  _injectRepair(_skipRepairs, params)
+end
+
+--This object should NEVER be repaired (not undo-able)
+--params: {name = ""or table of {"names"}, guid = "" or table of {"guids"}}
+function injectNonReparable(params)
+  _injectRepair(_nonRepairables, params)
+end
+
+-------------------------------------------------------------------------------
 
 function _uniqueList(order)
     local result = {}
@@ -271,8 +306,85 @@ function getInitiativeOrder()
 end
 
 -------------------------------------------------------------------------------
+--CONTEXTS: "Draw Action Cards", "Status Phase Draw Action Cards"
+local _actionCardAbilities = {
+  ["+1Draw"] = {
+    id = "+1Draw",
+    description = "Draw an additional action card.",
+    stackable = true,
+    sources = {
+      { id = "Neural Motivator",
+        context = "Status Phase Draw Action Cards",
+        refs = {OBJECTS = "Neural Motivator"},
+        stackable = false,
+        targetType = "OWNER"
+      },
+      { id = 'Scheming',
+        context = {"Draw Action Cards", "Status Phase Draw Action Cards"},
+        refs = {FACTION_ABILITIES = 'Scheming'},
+        stackable = false,
+        targetType = "OWNER"
+      }
+    }
+  }
+}
 
 function dealAllActionCards(dealOrder)
+    --local _activeDrawAbilities = _abilityHelper.getActiveAbilities({context = {"Draw Action Cards", "Status Phase Draw Action Cards"}})
+    local eliminatedPlayerSet = {}--_eliminationHelper.getEliminatedPlayers()
+
+    local function processColor(color)
+        local faction = _factionHelper.fromColor(color)
+        if not faction then
+            broadcastToAll('Deal action cards: no faction for ' .. color, 'Red')
+            return
+        end
+
+        if eliminatedPlayerSet[color] then
+            broadcastToAll('Deal action cards: ' .. color .. ' eliminated, skipping')
+            return
+        end
+
+        --[[local abilitiesSet = {}
+        for _, ability in ipairs(faction.abilities) do
+            abilitiesSet[ability] = true
+        end
+        for guid, color2 in pairs(guidToColor) do
+            if color == color2 then
+                abilitiesSet[guidToName[guid = true
+            end
+        end
+
+        local count = 1
+        if abilitiesSet['Neural Motivator'] then
+            count = count + 1
+            _safeBroadcastToColor('Neural Motivator active.', color, {0.1,0.5,0.1})
+        end
+        if abilitiesSet['Scheming'] then
+            count = count + 1
+            _safeBroadcastToColor('Scheming.', color, {0.1,0.5,0.1})
+        end
+        --]]
+
+        -- Deal.
+        _deckHelper.deal({
+            deck = 'Actions',
+            count = 1,--count,
+            color = color
+        })
+    end
+    print("Test order: ", table.concat(getInitiativeOrder().order, ", "))
+    dealOrder = dealOrder or Turns.enable and Turns.order or getInitiativeOrder().order
+    dealOrder = _uniqueList(dealOrder)
+    dealOrder = _restrictToSeated(dealOrder)
+
+    for _, color in ipairs(dealOrder) do
+        processColor(color)
+    end
+    broadcastToAll('Dealt Action Cards.')
+end
+
+function _dealAllActionCards(dealOrder)
     local lookForSet = {
         ['Neural Motivator'] = true,
     }
@@ -751,6 +863,10 @@ function _readyCards()
     for cardName, _ in pairs(_doNotReadySet) do
         excludeNameSet[cardName] = true
     end
+    for cardName,_ in pairs(_skipReadySet) do
+      excludeNameSet[cardName] = true
+    end
+    _skipReadySet = {}
     local function exclude(itemOrItems)
         if itemOrItems then
             if type(itemOrItems) == 'string' then
@@ -805,6 +921,18 @@ function _readyCards()
 end
 
 -------------------------------------------------------------------------------
+function _injectRepair(repairTable, newData)
+  assert(newData and type(newData) == "table" and newData.name or newData.guid)
+  --convert string or nil to table of strings
+  local names = newData.name and type(newData.name) == "string" and {newData.name} or newData.name or {}
+  for _,each in ipairs(names) do
+    repairTable.names[each] = true
+  end
+  local guids = newData.guid and type(newData.guid) == "string" and {newData.guid} or newData.guid or {}
+  for _,each in ipairs(guids) do
+    repairTable.guids[each] = true
+  end
+end
 
 function _repairUnits()
     local unitNameSet = {}
@@ -824,9 +952,15 @@ function _repairUnits()
         unitNameSet[color .. ' PDS'] = true
         unitNameSet[color .. ' Mech'] = true
     end
+    for each,_ in pairs(_customRepairables.names) do
+      unitNameSet[each] = true
+    end
 
     for _, object in ipairs(getAllObjects()) do
-        if unitNameSet[object.getName()] then
+      local objName = object.getName()
+      local objGUID = object.getGUID()
+        if unitNameSet[objName] or _customRepairables.guids[objGUID] --and nots...
+          and not (_nonRepairables.names[objName] or _skipRepairs.names[objName] or _skipRepairs.guids[objGUID] or _nonRepairables[objGUID]) then
             local rotation = object.getRotation()
             if rotation.z > 90 and rotation.z < 270 then
                 object.flip()
@@ -834,6 +968,7 @@ function _repairUnits()
         end
     end
 
+    _skipRepairs = {names = {}, guids = {}} --reset skips
     broadcastToAll('Repaired Units.')
 end
 
@@ -927,6 +1062,7 @@ function _endStatusPhaseCoroutine()
     _dealMinisterOfPolicyActionCard()
     coroutine.yield(0)
 
+    Global.call("setPhase")
     return 1
 end
 

@@ -36,6 +36,10 @@ local events =
   },
   ["frontierExplored"] = {--params: {system = "system'sGUID", color = "exploringPlayer", tokenPos = {vector}, abilities = {}, result = {[cardName] = cardGUID}}
     defaultCallback = "onFrontierExplored"
+  },
+
+  ["playerEliminated"] = {--params = {color = "eliminatedPlayerColor"}
+    defaultCallback = "onPlayerEliminated"
   }
 }
 

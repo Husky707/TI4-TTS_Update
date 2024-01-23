@@ -46,6 +46,7 @@ local TI4_HELPER_NAMES = {
   ['TI4_DICE_HELPER'] = true,
   ['TI4_EVENT_HELPER'] = true,
   ['TI4_EXPLORE_HELPER'] = true,
+  ['TI4_ELIMINATION_HELPER'] = true,
   ['TI4_FACTION_HELPER'] = true,
   ['TI4_GAME_DATA_HELPER'] = true,
   ['TI4_SETUP_HELPER'] = true,
@@ -144,6 +145,7 @@ local _zoneHelper = nil
 local function _initHelpers()
   _helperObjects = _initHelperObjects()
   _deckHelper = getHelperClient('TI4_DECK_HELPER')
+  Events = getHelperClient('TI4_EVENT_HELPER')
   _gameDataHelper = getHelperClient('TI4_GAME_DATA_HELPER')
   _factionHelper = getHelperClient('TI4_FACTION_HELPER')
   _setupHelper = getHelperClient('TI4_SETUP_HELPER')

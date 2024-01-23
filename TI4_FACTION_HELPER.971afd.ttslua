@@ -855,6 +855,7 @@ local factionFormat = {
   --heroAbility = {obj = self, func = "resolveHeroAbility", abilityName = "optionalName"}
     --params: {obj = cardObjRef, usingColor = ""color of player resolving ability}
     --return true to purge the card
+  --eliminationQuotes = "String" or table of {"Strings",...}(will be randomly chosen)
 
   --internal fields
   -- - color (string) or nil if not in use.

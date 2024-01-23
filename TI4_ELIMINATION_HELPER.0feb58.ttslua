@@ -1,0 +1,487 @@
+function getHelperClient(helperObjectName)
+    local helperObject = Global.call('getHelper', helperObjectName)
+    local function getCallWrapper(functionName)
+        helperObject = helperObject == nil and Global.call('getHelper', helperObjectName) or helperObject
+        if not helperObject.getVar(functionName) then error('missing ' .. helperObjectName .. '.' .. functionName) end
+        return function(parameters) return helperObject.call(functionName, parameters) end
+    end
+    return setmetatable({}, { __index = function(t, k) return getCallWrapper(k) end })
+end
+local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
+local _factionHelper = getHelperClient('TI4_FACTION_HELPER')
+local Events = getHelperClient('TI4_EVENT_HELPER')
+
+local Coru = {
+ _coroutines = {},
+ _coRunner = false,
+ _coQueue = {},
+ _coKillQueue = {},
+ step = {
+   ["running"] = function() end,
+   ["normal"] = function() end,
+   ["suspended"] = function(eachCo, callbackData)
+     local status, result = coroutine.resume(eachCo)
+     if not status then
+       print("Coroutine error: ", result)
+       if callbackData and callbackData.callback then callbackData.callback(result) end
+       return -1
+     else
+       if callbackData and callbackData.yieldback then callbackData.yieldback(result) end
+     end
+   end,
+   ["dead"] = function(eachCo, callbackData)
+     if callbackData and callbackData.callback then callbackData.callback(1) end
+     return -1
+   end,
+   ["catch"] = function(eachCo, callbackData, badState)
+     print("Caught a bad coru state: ", badState)
+     if callbackData and callbackData.callback then callbackData.callback(-1) end
+     return -1
+    end
+ },
+}
+
+local _eliminated = {}--indexed by color [keys] = true or "Resolved" if also cleaned up
+local Tokens = {
+  identifier = "ElimToken", -- searched from obj.getGMNotes() not by obj.getName()
+  scale = {x= 2.20, y = 2.20, z = 2.20},
+  activeScale = {x = 4, y = 2.2, z = 4},
+  assignments = {},--[tokenGUID] = color
+  catchNextSpawn = false,
+  existingSet = {},--[tokenGUID] = objRef
+
+  --find the original obj in bag
+  sourceContainer = "Tools and Helpers",
+  rootGUID = "eb196e",--Temp
+}
+
+--Public getters----------------------------------------------------------------
+--!querying these functions during game load from a save will likely yeild no results, wait a frame for this script to update
+
+function isPlayerEliminated(playerColor)
+  return _eliminated[playerColor]
+end
+
+--returns: {table} of eliminated player colors indexed by [color] keys = true
+function getEliminatedPlayers()
+  return copyTable(_eliminated)
+end
+
+------------------------------
+function declarePlayerEliminated(playerColor, tokenObj)
+  if _eliminated[playerColor] then return end
+  _eliminated[playerColor] = true
+
+  local faction = assert(_factionHelper.fromColor(playerColor))
+  Tokens.markElimination(playerColor, faction, tokenObj)
+
+  broadcastToAll('The '..playerColor..' player has been eliminated!', "Red")
+  if faction.eliminationQuotes then
+    local quotes = type(faction.eliminationQuotes) == "table" and faction.eliminationQuotes or {faction.eliminationQuotes}
+    local quote = quotes[math.random(1, #quotes)]
+    printToAll(quote, playerColor)
+  end
+  Events.invoke({event = "playerEliminated", params = {color = playerColor, factionName = faction.name}})
+end
+
+function resolvePlayerElimination(playerColor, tokenObj)
+  if not _eliminated[color] then
+    declarePlayerEliminated(playerColor, tokenObj)
+  end
+  if _eliminated[color] == "Resolved" then return end
+  _eliminated[color] = "Resolved"
+
+  local faction = assert(_factionHelper.fromColor(playerColor))
+  Tokens.markElimination(playerColor, faction, tokenObj)
+end
+
+-------------------------------------------------------------------------------
+function _searchForEliminations()
+  _eliminated = {}
+  Tokens.assignments = {}
+  Tokens.existingSet = {}
+  for _,eachObj in ipairs(getAllObjects()) do
+    if eachObj.getGMNotes() == Tokens.identifier then
+      local guid = eachObj.getGUID()
+      Tokens.existingSet[guid] = true
+      local target = _zoneHelper.zoneFromPosition(eachObj.getPosition())
+      if target then
+        _eliminated[target] = "Resolved"
+        --flagging as resolved for now. This will prevent automation of cleanup, but should be fine as this only fires on load
+        --Could fix by detecting if faction components have been packed, but not implementing now
+        Tokens.assignments[guid] = target
+        Tokens.assignments[target] = guid
+      end
+    end
+  end
+end
+
+Tokens.markElimination = function(color, faction, token)
+  if Tokens.assignments[color] then return end
+  faction = assert(faction or _factionHelper.fromColor(color))
+
+  local function tryGetPosition()
+    local sheet = getObjectFromGUID(faction.factionSheetGuid)
+    local _rotation = sheet.getRotation()
+    local _pos = sheet.getPosition()
+    _pos.y = _pos.y + 0.01
+    _rotation.y = _rotation.y + 15
+    return _pos, _rotation
+  end
+  local success, position, rotation = pcall(tryGetPosition)
+
+  local _isInPosition = false
+  local function findAToken()
+    local copyAssigned = false
+    --find an unassigned token
+    for eachGUID,eachObj in pairs(Tokens.existingSet or {}) do
+      copyAssigned = eachGUID
+      if not Tokens.assignments[eachGUID] then
+        return eachObj
+      end
+    end
+
+    local function onSpawn(clone)
+      local newGuid = clone.getGUID()
+      ignoreDeletedItem(newGuid)
+      clone.setLock(true)
+      clone.setScale(Tokens.activeScale)
+    end
+
+    --else find and copy an assigned token
+    if copyAssigned then
+      local obj = getObjectFromGUID(copyAssigned)
+      local spawnData = {
+        data = obj.getData(),
+        position = position,
+        rotation = rotation,
+        scale = Tokens.activeScale,
+        callback_function = onSpawn
+      }
+      Tokens.catchNextSpawn = true
+      local clone = spawnObjectData(spawnData)
+      _isInPosition = true
+      return clone
+    end
+    --else find from toolbag
+    for _,eachObj in ipairs(getAllObjects()) do
+      if eachObj.getName() == Tokens.sourceContainer then
+        Tokens.catchNextSpawn = true
+        _isInPosition = true
+        local foundToken = eachObj.takeObject({
+          position          = position,
+          rotation          = rotation,
+          callback_function = onSpawn,
+          smooth            = false,
+          guid              = Tokens.rootGUID,
+          top               = false,
+        })
+        return foundToken
+      end
+    end
+    return false
+  end
+  token = token or findAToken
+  if not token then return end
+
+  local guid = token.getGUID()
+  Tokens.assignments[guid] = color
+  Tokens.assignments[color] = guid
+  token.clearContextMenu()
+  if _eliminated[color] ~= "Resolved" then Tokens.setContextMenu("Assigned", token) end
+  token.setLock(true)
+  if not _isInPosition and position and rotation then
+    token.setScale(Tokens.activeScale)
+    token.setPositionSmooth(position, false, true)
+    token.setRotationSmooth(rotation)
+  end
+end
+
+Tokens.setContextMenu = function(contextMode, obj)
+  local function setAssigned()
+    obj.addContextMenuItem("Resolve Elimination", _contextResolveElimination)
+  end
+
+  local function setInZone()
+    obj.addContextMenuItem("Declare Elimination", _contextDeclarationElimination)
+    obj.addContextMenuItem("Resolve Elimination", _contextDeclareAndResolve)
+  end
+
+  local switch = {
+    ["Assigned"] = setAssigned,
+    ["InZone"] = setInZone,
+    ["catch"] = function() error("Caught typo in Tokens.setContextMenu >"..contextMode.."<") end
+  }
+  local try = switch[contextMode] and contextMode or "catch"
+  switch[try]()
+end
+
+--Token manipulation events-----------------------------------------------------
+
+--Inform players of how the token works
+local _infoCooldown = false
+function onObjectDrop(player_color, obj)
+  if obj.getGMNotes() ~= Tokens.identifier then return end
+
+  local guid = obj.getGUID()
+  if Tokens.assignments[guid] then return end
+  if not obj.is_face_down then obj.flip() end
+
+  local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
+  if not zone then
+    obj.clearContextMenu()
+    if not _infoCooldown or Time.time - _infoCooldown > 4 then
+      _infoCooldown = Time.time
+      printToAll("To declare an elimination, place the elimination token in a player's play area and flip it.\nThen to automate that elimination, right-click the token and select [Resolve].", "White")
+    end
+  elseif not Tokens.assignments[zone] then
+    printToAll("Flip the token to declare the "..zone.." player eliminated.", "Orange")
+    Tokens.setContextMenu("InZone", obj)
+  end
+end
+
+--Manage pick-up of assigned tokens
+function onObjectPickUp(player_color, obj)
+  local guid = obj.getGUID()
+  if not Tokens.assignments[guid] then return end
+
+  local spawnData = {
+    data = obj.getData(),
+    position = obj.getPosition(),
+    rotation = obj.getRotation(),
+    scale = Tokens.activeScale,
+  }
+  Tokens.catchNextSpawn = true
+  local clone = spawnObjectData(spawnData)
+  local assignedColor = Tokens.assignments[guid]
+  local newGuid = clone.getGUID()
+  clone.setLock(true)
+  ignoreDeletedItem(newGuid)
+  Tokens.assignments[newGuid] = assignedColor
+  Tokens.assignments[assignedColor] = newGuid
+  Tokens.assignments[guid] = nil
+  obj.setScale(Tokens.scale)
+  obj.clearContextMenu()
+  Tokens.setContextMenu("Assigned", clone)
+end
+
+--Flip new tokens to show Flip instructions
+function onObjectSpawn(obj)
+  if obj.getGMNotes() ~= Tokens.identifier then return end
+  Tokens.existingSet[obj.getGUID()] = obj
+  if Tokens.catchNextSpawn then Tokens.catchNextSpawn = false return end
+
+  if not obj.is_face_down then obj.flip() end
+end
+
+--Resolve elimination flip
+function onObjectRotate(obj, spin, flip, player_color, old_spin, old_flip)
+  if flip == old_flip or flip ~= 0 then return end --only interested in flips and flips to face-up
+  if obj.getGMNotes() ~= Tokens.identifier then return end
+
+  local guid = obj.getGUID()
+  local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
+  if zone and not Tokens.assignments[zone] then
+    declarePlayerEliminated(zone, obj)
+  end
+end
+
+--prevent the flipping of engaged elim tokens
+function onPlayerAction(player, action, targets)
+  if action ~= Player.Action.FlipOver then return end
+  for _,each in ipairs(targets or {}) do
+    --Dont flip engaged tokens
+    if Tokens.assignments[each.getGUID()] then return false end
+
+    if Tokens.identifier == each.getGMNotes() then
+      local zone = _zoneHelper.zoneFromPosition(each.getPosition())
+
+      --Dont flip tokens that are not in a play area
+      if not zone then return false end
+
+      --Dont flip tokens in an eliminated player's play area
+      if Tokens.assignments[zone] then
+        printToAll("The "..zone.." player is already eliminated.", "Yellow")
+        return false
+      end
+    end
+  end
+end
+
+function onObjectDestroy(dying_object)
+  Tokens.existingSet[dying_object.getGUID()] = nil
+end
+
+-------------------------------------------------------------------------------
+function _contextResolveElimination(color, position, obj)
+  assert(obj.getGMNotes() == Tokens.identifier)
+  Player[color].clearSelectedObjects()
+  local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
+  if not zone then
+    printToColor("The Elimination Token must be in a player's zone.", color, "Yellow")
+    return
+  end
+
+  obj.clearContextMenu()
+  resolvePlayerElimination(zone, obj)
+end
+
+function _contextDeclarationElimination(color, position, obj)
+  assert(obj.getGMNotes() == Tokens.identifier)
+  Player[color].clearSelectedObjects()
+  local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
+  if not zone then
+    printToColor("The Elimination Token must be in a player's zone.", color, "Yellow")
+    return
+  end
+
+  declarePlayerEliminated(zone, obj)
+end
+
+function _contextDeclareAndResolve(color, position, obj)
+  assert(obj.getGMNotes() == Tokens.identifier)
+  Player[color].clearSelectedObjects()
+  local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
+  if not zone then
+    printToColor("The Elimination Token must be in a player's zone.", color, "Yellow")
+    return
+  end
+
+  obj.clearContextMenu()
+  declarePlayerEliminated(zone, obj)
+  resolvePlayerElimination(zone, obj)
+end
+
+-------------------------------------------------------------------------------
+function CoroutineRunner()
+  while next(Coru._coroutines) do
+    local deadList = {}
+    --Progress each coroutine
+    for eachCo,callbackData in pairs(Coru._coroutines) do
+      local status = coroutine.status(eachCo)
+      status = Coru.step[status] and status or "catch"
+      local isDead = Coru.step[status](eachCo, callbackData) == -1 or status == "dead"
+      if isDead then table.insert(deadList, eachCo) end
+    end
+
+    --Empty killQueue
+    for _,each in ipairs(Coru._coKillQueue) do
+      table.insert(deadList, each)
+    end
+    Coru._coKillQueue = {}
+
+    --Remove dead coroutines
+    for _,each in ipairs(deadList) do
+      Coru._coroutines[each] = nil
+    end
+
+    coroutine.yield(0)
+    --Add any waiting coroutines here
+    for _,each in ipairs(Coru._coQueue) do
+      Coru._coroutines[each.co] = {callback = each.callback, yieldback = each.yieldback}
+    end
+    Coru._coQueue = {}
+  end
+
+  Coru._coRunner = false
+  return 1
+end
+
+--callbackData = { yieldback = func (called each time co yeilds), callback = func (called when co ends)}
+Coru.run = function(newCo, callbackData)
+  if Coru._coRunner then
+    table.insert(Coru._coQueue, {co = newCo, callback = callbackData and callbackData.callback, yieldback = callbackData and callbackData.yieldback})
+  else
+    Coru._coroutines[newCo] = {callback = callbackData and callbackData.callback, yieldback = callbackData and callbackData.yieldback}
+    Coru._coRunner = startLuaCoroutine(self, "CoroutineRunner")
+  end
+end
+
+Coru.stop = function(co)
+  for _,each in ipairs(Coru._coQueue) do
+    if each.co == co then
+      if each.callback then each.callback(-1) end
+      each = nil
+      break
+    end
+  end
+  if not Coru._coroutines[co] then return end
+
+  if Coru._coRunner then
+    if Coru._coroutines[co].callback then Coru._coroutines[co].callback(-1) end
+    table.insert(Coru._coKillQueue, co)
+  else
+    if Coru._coroutines[co].callback then Coru._coroutines[co].callback(-1) end
+    Coru._coroutines[co] = nil
+  end
+end
+
+Coru.wait = function(t, callback)
+  local newWait = coroutine.create(function()
+    local t1 = Time.time
+    while Time.time - t1 < t do
+      coroutine.yield(0)
+    end
+    return 1
+  end)
+
+  Coru.run(newWait, {callback = callback})
+  return newWait
+end
+-------------------------------------------------------------------------------
+function copyTable(t)
+    if t and type(t) == 'table' then
+        local copy = {}
+        for k, v in pairs(t) do
+            copy[k] = type(v) == 'table' and copyTable(v) or v
+        end
+        t = copy
+    end
+    return t
+end
+
+local _deletedItemsGuid = false
+function ignoreDeletedItem(guid)
+    local deletedItems = _deletedItemsGuid and getObjectFromGUID(_deletedItemsGuid)
+    if not deletedItems then
+        for _, object in ipairs(getAllObjects()) do
+            if object.getName() == 'TI4 Deleted Items' then
+                _deletedItemsGuid = object.getGUID()
+                deletedItems = object
+                break
+            end
+        end
+    end
+    if deletedItems then
+        deletedItems.call('ignoreGuid', guid)
+    end
+end
+-------------------------------------------------------------------------------
+function onLoad(saveState)
+    self.setColorTint({ r = 0.25, g = 0.25, b = 0.25 })
+    self.setScale({ x = 2, y = 0.01, z = 2 })
+    self.setName('TI4_ELIMINATION_HELPER')
+    self.setDescription('Shared helper functions used by other objects, PLEASE LEAVE ON TABLE! This object is only visible to the black (GM) player.')
+
+    -- Only the GM/black player can see this object.  Others can still interact!
+    local invisibleTo = {}
+    for _, color in ipairs(Player.getColors()) do
+        if color ~= 'Black' then
+            table.insert(invisibleTo, color)
+        end
+    end
+    self.setInvisibleTo(invisibleTo)
+
+    _searchForEliminations()
+end
+-------------------------------------------------------------------------------
+-- @author Darrell
+
+local _lockGlobalsMetaTable = {}
+function _lockGlobalsMetaTable.__index(table, key)
+    error('Accessing missing global "' .. tostring(key or '<nil>') .. '", typo?', 2)
+end
+function _lockGlobalsMetaTable.__newindex(table, key, value)
+    error('Globals are locked, cannot create global variable "' .. tostring(key or '<nil>') .. '"', 2)
+end
+setmetatable(_G, _lockGlobalsMetaTable)
