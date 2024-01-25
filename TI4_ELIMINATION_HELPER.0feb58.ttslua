@@ -7,8 +7,9 @@ function getHelperClient(helperObjectName)
     end
     return setmetatable({}, { __index = function(t, k) return getCallWrapper(k) end })
 end
-local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
 local _factionHelper = getHelperClient('TI4_FACTION_HELPER')
+local _stratHelper = getHelperClient('TI4_STRATEGY_CARD_HELPER')
+local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
 local Events = getHelperClient('TI4_EVENT_HELPER')
 
 local Coru = {
@@ -41,6 +42,7 @@ local Coru = {
  },
 }
 
+local _elimInProgress = false
 local _eliminated = {}--indexed by color [keys] = true or "Resolved" if also cleaned up
 local Tokens = {
   identifier = "ElimToken", -- searched from obj.getGMNotes() not by obj.getName()
@@ -54,6 +56,13 @@ local Tokens = {
   sourceContainer = "Tools and Helpers",
   rootGUID = "eb196e",--Temp
 }
+
+local Elim = {--[[
+  target = elimPlayer,
+  colors = zoneColors,
+  factions = unpackedFactions,
+
+--]]}
 
 --Public getters----------------------------------------------------------------
 --!querying these functions during game load from a save will likely yeild no results, wait a frame for this script to update
@@ -85,6 +94,7 @@ function declarePlayerEliminated(playerColor, tokenObj)
 end
 
 function resolvePlayerElimination(playerColor, tokenObj)
+  if _elimInProgress then printToAll("Cannot resolve more than one elimination at a time, please wait.", color, "Red") return end
   if not _eliminated[color] then
     declarePlayerEliminated(playerColor, tokenObj)
   end
@@ -93,6 +103,7 @@ function resolvePlayerElimination(playerColor, tokenObj)
 
   local faction = assert(_factionHelper.fromColor(playerColor))
   Tokens.markElimination(playerColor, faction, tokenObj)
+  Elim.resolve(playerColor)
 end
 
 -------------------------------------------------------------------------------
@@ -298,6 +309,7 @@ function onPlayerAction(player, action, targets)
 
       --Dont flip tokens that are not in a play area
       if not zone then return false end
+      if _elimInProgress then printToColor("Please wait, an elimination is being resolved.", player.color, "Red") return end
 
       --Dont flip tokens in an eliminated player's play area
       if Tokens.assignments[zone] then
@@ -312,8 +324,9 @@ function onObjectDestroy(dying_object)
   Tokens.existingSet[dying_object.getGUID()] = nil
 end
 
--------------------------------------------------------------------------------
+--Context Menu Funcs------------------------------------------------------------
 function _contextResolveElimination(color, position, obj)
+  if _elimInProgress then printToColor("Please wait, an elimination is being resolved.", color, "Red") return end
   assert(obj.getGMNotes() == Tokens.identifier)
   Player[color].clearSelectedObjects()
   local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
@@ -322,11 +335,22 @@ function _contextResolveElimination(color, position, obj)
     return
   end
 
-  obj.clearContextMenu()
-  resolvePlayerElimination(zone, obj)
+  local function onConfirmed()
+    --re-fetch zone in case another player moved it while menu is open
+    local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
+    if not zone then
+      printToColor("The Elimination Token must be in a player's zone.", color, "Yellow")
+      return
+    end
+
+    obj.clearContextMenu()
+    resolvePlayerElimination(zone, obj)
+  end
+  Player[color].showConfirmDialog("WARNING: You are about to drastically alter the board state; the "..zone.." player's components will be returned in accordance with the player elimination rules. Proceed?", onConfirmed)
 end
 
 function _contextDeclarationElimination(color, position, obj)
+  if _elimInProgress then printToColor("Please wait, an elimination is being resolved.", color, "Red") return end
   assert(obj.getGMNotes() == Tokens.identifier)
   Player[color].clearSelectedObjects()
   local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
@@ -339,6 +363,7 @@ function _contextDeclarationElimination(color, position, obj)
 end
 
 function _contextDeclareAndResolve(color, position, obj)
+  if _elimInProgress then printToColor("Please wait, an elimination is being resolved.", color, "Red") return end
   assert(obj.getGMNotes() == Tokens.identifier)
   Player[color].clearSelectedObjects()
   local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
@@ -347,9 +372,413 @@ function _contextDeclareAndResolve(color, position, obj)
     return
   end
 
-  obj.clearContextMenu()
-  declarePlayerEliminated(zone, obj)
-  resolvePlayerElimination(zone, obj)
+  local function onConfirmed()
+    --re-fetch zone in case another player moved it while menu is open
+    local zone = _zoneHelper.zoneFromPosition(obj.getPosition())
+    if not zone then
+      printToColor("The Elimination Token must be in a player's zone.", color, "Yellow")
+      return
+    end
+
+    obj.clearContextMenu()
+    declarePlayerEliminated(zone, obj)
+    resolvePlayerElimination(zone, obj)
+  end
+  Player[color].showConfirmDialog("WARNING: You are about to drastically alter the board state; the "..zone.." player's components will be returned in accordance with the player elimination rules. Proceed?", onConfirmed)
+end
+
+--Elimination Automation--------------------------------------------------------
+
+--[[faction.
+elimInstructions = {
+  DO = {guid = self.getGUID(), func = "doFuncName"},--params: {color = eliminatedColor} --no return, just do what u need to do
+  ignore = {
+    ME = {
+      names = {}, --"string" or table of {"strings"}. Objects with these names will not be returned
+      guids = {}, --"guid" or table of {"guids"}. Objects with these guids will not be returned
+      GET = {guid = self.getGUID(), func = "getFuncName"},--params:{color}, return: {names = {}, guids = {}}
+    },
+    OTHERS = {}
+  },
+  include = {
+    ME = {},
+    OTHERS = {}
+  }
+}--]]
+
+--gather ignore and includes from seated factions
+--gather elim Items
+--resolve in steps
+--
+Elim.resolve = function(elimPlayer)
+  if _elimInProgress then return end
+
+  Elim.target = assert(elimPlayer)
+  _elimInProgress = Elim.target
+  Elim.colors = _zoneHelper.zones()
+  Elim.factions = _factionHelper.allFactions() or {}
+  Elim.commandTokens = {}
+  Elim.units = {}
+  Elim.promms = {}
+  Elim.strats = {}
+  Elim.misc = {}
+  Elim.containers = {}
+  Elim.speakerToken = {}
+
+  --gather faction specific elim instructions
+  local _factionInstructions = {names = {}, guids = {}}--name and guid tables have [key] = bool where true == include, false == exclude
+  for fCol,eachFaction in pairs(Elim.factions) do
+    local data = eachFaction.elimInstructions or false
+    if data then
+      if data.ignore then --get ignores
+        if Elim.target == fCol then --Get .ME vals
+          if data.ignore.ME then
+            for _,each in ipairs(data.ignore.ME.names or {}) do
+              _factionInstructions.names[each] = false
+            end
+            for _,each in ipairs(data.ignore.ME.guids or {}) do
+              _factionInstructions.guids[each] = false
+            end
+            local gets = data.ignore.ME.GET and tryCall(data.ignore.ME.GET) or {}
+            if type(gets) == "table" then
+              for _,each in ipairs(gets) do
+                _factionInstructions.names[each] = false
+              end
+              for _,each in ipairs(gets) do
+                _factionInstructions.guids[each] = false
+              end
+            end
+          end
+        elseif data.ignore.OTHERS then --get .OTHERS vals
+          for _,each in ipairs(data.ignore.OTHERS.names or {}) do
+            _factionInstructions.names[each] = false
+          end
+          for _,each in ipairs(data.ignore.OTHERS.guids or {}) do
+            _factionInstructions.guids[each] = false
+          end
+          local gets = data.ignore.OTHERS.GET and tryCall(data.ignore.OTHERS.GET) or {}
+          if type(gets) == "table" then
+            for _,each in ipairs(gets) do
+              _factionInstructions.names[each] = false
+            end
+            for _,each in ipairs(gets) do
+              _factionInstructions.guids[each] = false
+            end
+          end
+        end
+      end
+      if data.include then --get includes (will override matching ignore [keys])
+        if Elim.target == fCol then --Get .ME vals
+          if data.include.ME then
+            for _,each in ipairs(data.include.ME.names or {}) do
+              _factionInstructions.names[each] = true
+            end
+            for _,each in ipairs(data.include.ME.guids or {}) do
+              _factionInstructions.guids[each] = true
+            end
+            local gets = data.include.ME.GET and tryCall(data.include.ME.GET) or {}
+            if type(gets) == "table" then
+              for _,each in ipairs(gets) do
+                _factionInstructions.names[each] = true
+              end
+              for _,each in ipairs(gets) do
+                _factionInstructions.guids[each] = true
+              end
+            end
+          end
+        elseif data.include.OTHERS then --get .OTHERS vals
+          for _,each in ipairs(data.include.OTHERS.names or {}) do
+            _factionInstructions.names[each] = true
+          end
+          for _,each in ipairs(data.include.OTHERS.guids or {}) do
+            _factionInstructions.guids[each] = true
+          end
+          local gets = data.include.OTHERS.GET and tryCall(data.include.OTHERS.GET) or {}
+          if type(gets) == "table" then
+            for _,each in ipairs(gets) do
+              _factionInstructions.names[each] = true
+            end
+            for _,each in ipairs(gets) do
+              _factionInstructions.guids[each] = true
+            end
+          end
+        end
+      end
+    end
+  end
+
+  local containers = {}
+  local units = {}
+  local promms = {}
+  for _,color in ipairs(Elim.colors) do
+    promms["Support for the Throne ("..color..")"] = color
+    promms["Trade Agreement ("..color..")"] = color
+    promms["Political Secret ("..color..")"] = color
+    promms["Ceasefire ("..color..")"] = color
+    promms["Alliance ("..color..")"] = color
+    units[color .. ' Infantry'] = color
+    units[color .. ' Fighter'] = color
+    units[color .. ' Destroyer'] = color
+    units[color .. ' Carrier'] = color
+    units[color .. ' Cruiser'] = color
+    units[color .. ' Dreadnought'] = color
+    units[color .. ' War Sun'] = color
+    units[color .. ' Space Dock'] = color
+    units[color .. ' PDS'] = color
+    units[color .. ' Mech'] = color
+    if Elim.factions[color] then
+      units[Elim.factions[color].flagship] = color
+      local allyName = Elim.factions[color].shortName or Elim.factions[color].frankenName
+      promms[allyName .. " Alliance"] = color
+    end
+  end
+
+  local commandTokens = {[Elim.target.." Command Token"] = true}
+  containers[Elim.target.." Command Tokens Bag"] = "commandTokens"
+  if Elim.factions[Elim.target] then
+    commandTokens[Elim.factions[Elim.target].tokenName .. " Command Token"] = true
+    containers[Elim.factions[Elim.target].tokenName .. " Command Tokens Bag"] = "commandTokens"
+  end
+  local strats = _stratHelper.getStrategyCards()
+  for _,each in pairs(strats or {}) do each = true end --cast to boolean
+
+  local targetZone = _zoneHelper.zoneAttributes(Elim.target) or {}
+  local function categorizeObj(name, guid, obj)
+    if _factionInstructions.names[name] == false or _factionInstructions.guids[guid] == false then return end --explicitly compare to false, these are excluded objs
+    --Handle objects by expected names
+    if promms[name] then
+      table.insert(Elim.promms, {name = name, guid = guid, obj = obj, color = promms[name]})
+      return
+    elseif containers[name] then
+      Elim.containers[containers[name]] = obj
+      return
+    elseif units[name] then --Elim.units[guid] = {name = name, obj = obj}
+      table.insert(Elim.units, {name = name, guid = guid, obj = obj, color = units[name]})
+      return
+    elseif commandTokens[name] then --Elim.commandTokens[guid] = obj return
+      table.insert(Elim.commandTokens, {name = name, guid = guid, obj = obj})
+      return
+    elseif strats[name] then
+      local isInZone = _zoneHelper.zoneFromPosition(obj.getPosition())
+      if isInZone == Elim.target then table.insert(Elim.strats, {name = name, guid = guid, obj = obj}) end--Elim.strats[guid] = obj end
+      return
+    elseif name == "Speaker Token" then
+      Elim.speakerToken = {guid = guid, obj = obj}
+      return
+    elseif _factionInstructions.names[name] or _factionInstructions.guids[guid] then --uncategorized include
+      table.insert(Elim.misc, {name = name, guid = guid, obj = obj})
+      return
+    end
+    --handle unknown object bassed on location
+    --hand set
+    --zone set
+    if not targetZone then return end
+    local oPos = obj.getPosition()
+    if not _boundingBoxContains(targetZone.boundingBox, oPos) then return end
+    --handle in target player's zone
+  end
+  for _,eachObj in ipairs(getAllObjects()) do
+    local oName = eachObj.getName()
+    local oGuid = eachObj.getGUID()
+    categorizeObj(oName, oGuid, eachObj)
+  end
+
+  local coru = coroutine.create(function()
+    safePrint("ALL","=-_________________________-=", "Yellow")
+    safeBroadcast("ALL","|        Resolving Elimination...       |", Elim.target)
+
+    --return command Tokens
+    safePrint("ALL", "|\n|~Returning command tokens...", "Yellow")
+    if Elim.containers["commandTokens"] ~= nil then
+      local _count = 0
+      for _,eachToken in ipairs(Elim.commandTokens) do
+        local activeObj = eachToken.obj ~= nil and eachToken.obj or getObjectFromGUID(eachToken.guid)
+        if activeObj then Elim.containers["commandTokens"].putObject(activeObj) _count = _count + 1 end
+        coroutine.yield(0)
+        coroutine.yield(0)
+      end
+      safePrint("ALL", "|   Success: Returned ".._count.." tokens.","Yellow")
+    else
+      safePrint("ALL", "|!FAILED! Could not find "..Elim.target.."\'s Command Tokens Bag", "RED")
+    end
+    coroutine.yield(0)
+
+    --return elim player's units
+    safePrint("ALL", "|\n|~Returning units...", "Yellow")
+    if Elim.units and next(Elim.units) then
+      local targetUnits = {}--{{n,obj,col,guid},}
+      local othersUnits = {}--{{n,obj,col,guid},}
+      local unitBags = {}--[color][unitType] = objRef
+      local _missingBags = {}
+      for _,each in ipairs(Elim.colors) do unitBags[each] = {} _missingBags[each] = {} end--init
+      --separate unit objs by owner. separate unit bags from unit pieces
+      --other players' units are returned if thay are captured in the elim player's zone
+      for _,eachUnit in ipairs(Elim.units) do
+        eachUnit.obj = eachUnit.obj ~= nil and eachUnit.obj or getObjectFromGUID(eachUnit.guid)
+        local liveRef = eachUnit.obj
+        if liveRef then
+          if liveRef.tag == "Bag" then
+            unitBags[eachUnit.color][eachUnit.name] = liveRef
+          else
+            local targetSet = eachUnit.color == Elim.target and targetUnits or othersUnits
+            table.insert(targetSet, eachUnit)
+          end
+        end
+      end
+      --todo Get fighter stacks
+      for _,eachUnit in ipairs(targetUnits) do
+        if unitBags[Elim.target][eachUnit.name] then
+          unitBags[Elim.target][eachUnit.name].putObject(eachUnit.obj)
+          coroutine.yield(0)
+          coroutine.yield(0)
+        else
+          _missingBags[Elim.target][eachUnit.name] = true
+        end
+      end
+      coroutine.yield(0)
+      --report failures
+      if next(_missingBags[Elim.target] or {}) then
+        local pTable = {"! Failed to find unit bags for:"}
+        for each,_ in pairs(_missingBags[Elim.target]) do
+          table.inset(pTable,each)
+        end
+        safePrint("ALL", table.concat(pTable, ", "), "Red")
+      end
+      coroutine.yield(0)
+      --find captued units
+      _missingBags[Elim.target] = nil
+      local _isMissingBags = false
+      local captureCount = 0
+      for _,eachUnit in ipairs(othersUnits) do
+        eachUnit.obj = eachUnit.obj ~= nil and eachUnit.obj or getObjectFromGUID(eachUnit.guid)
+        local liveRef = eachUnit.obj
+        if liveRef then
+          if _boundingBoxContains(targetZone.boundingBox, liveRef.getPosition()) then
+            local bag = not _missingBags[eachUnit.color][eachUnit.name] and unitBags[eachUnit.color] and unitBags[eachUnit.color][eachUnit.name]
+            if bag ~= nil then
+              captureCount = captureCount + 1
+              bag.putObject(liveRef)
+              coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+            else
+              _isMissingBags = true
+              _missingBags[eachUnit.color][eachUnit.name] = true
+            end
+          end
+        end
+      end
+      --report captures
+      if captureCount > 0 then
+        safePrint("ALL","|  Returned "..captureCount.." captured units", "Green")
+        --report failures
+        if _isMissingBags then
+          local pTable = {"! Failed to find unit bags for:"}
+          for eachCol,missing in pairs(_missingBags) do
+            for eachU,_ in pairs(missing or {}) do
+              table.insert(pTable,eachU)
+            end
+          end
+          safePrint("ALL", table.concat(pTable, ", "), "Red")
+        end
+      end
+      coroutine.yield(0)
+    else
+      safePrint("ALL", "|!FAILED! Did not locate any units.", "RED")
+    end
+
+    --Move Speaker
+
+    --Return Promms
+
+    --Reclaim Promms
+
+    --Return Strat(s)
+    if next(Elim.strats) then
+      safePrint("ALL", "|\n|~Returning Strategy Card(s)...", "Yellow")
+      coroutine.yield(0)
+      local _printStrats = {"|  Returned:"}
+      for _,eachStrat in ipairs(Elim.strats) do
+        table.insert(_printStrats, eachStrat.name)
+        _stratHelper.returnStrategyCard({name = eachStrat.name, ignoreStability = true})
+        coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+      end
+      --print result
+      local _comma = #_printStrats > 2 and ", " or " "
+      safePrint("ALL", table.concat(_printStrats, _comma), "Yellow")
+      coroutine.yield(0)
+    end
+
+    --Return secrets
+
+    --Discard agendas
+
+    --Discard action cards
+
+    --Handle faction specific
+
+    --run faction specific DO actions
+    for fCol,eachFaction in pairs(Elim.factions or {}) do
+      local instructs = eachFaction.elimInstructions or false
+      if instructs and instructs.DO then
+        tryCall(instructs.DO, {color = Elim.target})
+        coroutine.yield(0)
+        coroutine.yield(0)
+      end
+    end
+
+    safePrint("ALL", "|        Elimination Resolved         |", "Teal")
+    _elimInProgress = false
+    return 1
+  end)
+  Coru.run(coru)
+end
+
+--------------------------------------------------------------------------------
+--printToAll and broadcastToAll sometimes throw erros if a player is not seated
+--players = "ALL" or "color" or table of Cols
+--txtCol = "color" or "MATCH" to match the color of recipient
+function safePrint(players, msg, txtCol)
+  local function getTargets()
+    local t = {}
+    if players == "ALL" then
+      local P = Player.getPlayers()
+      for _,each in ipairs(P or {}) do
+        if each.seated then table.insert(t, each.color) end
+      end
+      return t
+    end
+    --else
+    players = type(players) == "table" and players or {players}
+    for _,each in ipairs(players) do
+      if Player[each].seated then table.insert(t, each) end
+    end
+    return t
+  end
+  local targets = getTargets() or {}
+  for _,each in ipairs(targets) do
+    printToColor(msg, each, txtCol == "MATCH" and each or txtCol)
+  end
+end
+
+function safeBroadcast(players, msg, txtCol)
+  local function getTargets()
+    local t = {}
+    if players == "ALL" then
+      local P = Player.getPlayers()
+      for _,each in ipairs(P or {}) do
+        if each.seated then table.insert(t, each.color) end
+      end
+      return t
+    end
+    players = type(players) == "table" and players or {players}
+    for _,each in ipairs(players) do
+      if Player[each].seated then table.insert(t, each) end
+    end
+    return t
+  end
+  local targets = getTargets() or {}
+  for _,each in ipairs(targets) do
+    broadcastToColor(msg, each, txtCol == "MATCH" and each or txtCol)
+  end
 end
 
 -------------------------------------------------------------------------------
@@ -455,6 +884,38 @@ function ignoreDeletedItem(guid)
     if deletedItems then
         deletedItems.call('ignoreGuid', guid)
     end
+end
+
+function _boundingBoxContains(boxXZ, position)
+    assert(type(boxXZ) == 'table' and boxXZ.min and type(position) == 'table' and position.x)
+    local gteMin = position.x >= boxXZ.min.x and position.z >= boxXZ.min.z
+    local lteMax = position.x <= boxXZ.max.x and position.z <= boxXZ.max.z
+    return gteMin and lteMax
+end
+
+function tryCall(callData, params)
+  local function try()
+    --validate
+    assert(callData and type(callData) == "table")
+    callData.obj = assert(callData.obj ~= nil and callData.obj or getObjectFromGUID(callData.guid))
+    assert(callData.obj ~= nil and type(callData.obj) == "userdata", "callback obj could not be found")
+    assert(callData.func and type(callData.func) == "string" and callData.obj.getVar(callData.func), 'missing ' .. callData.obj.getName() .. '.' .. callData.func)
+    --build params
+    local passParams = params == nil and {} or type(params) == "table" and params or {params}
+    local dataParams = callData.params == nil and {} or type(callData.params) == "table" and callData.params or {callData.params}
+    local mergedParams = {} --params will overide callData.params values that have the same key
+    for k,v in pairs(dataParams) do mergedParams[k] = v end
+    for k, v in pairs(passParams) do
+      if type(k) == "number" then table.insert(mergedParams, v)
+      else mergedParams[k] = v
+      end
+    end
+    --call
+    return callData.obj.call(callData.func, mergedParams)
+  end
+  local success, result = pcall(try)
+  if not success then print("Failed callback: callData incorrectly formated: ", result) return end
+  return result
 end
 -------------------------------------------------------------------------------
 function onLoad(saveState)

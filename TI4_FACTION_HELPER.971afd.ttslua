@@ -852,10 +852,28 @@ local factionFormat = {
   commander = '', --string
   hero = '',--string
   --Optionally define a function to resolve the hero's ability
-  --heroAbility = {obj = self, func = "resolveHeroAbility", abilityName = "optionalName"}
+  --heroAbility = {guid = self.getGUID(), func = "resolveHeroAbility", abilityName = "optionalName"},
     --params: {obj = cardObjRef, usingColor = ""color of player resolving ability}
     --return true to purge the card
+
   --eliminationQuotes = "String" or table of {"Strings",...}(will be randomly chosen)
+  elimInstructions = { --ME means this faction was eliminated, OTHERS means another faction was elim'd
+    --All ME and OTHER tables are formatted the same
+    ignore = {
+      ME = {
+        names = {}, --"string" or table of {"strings"}. Objects with these names will not be returned
+        guids = {}, --"guid" or table of {"guids"}. Objects with these guids will not be returned
+        get = {guid = self.getGUID(), func = "getFuncName"},--params:{color}, return: {names = {}, guids = {}}
+        do = {guid = self.getGUID(), func = "doFuncName"},--no return.
+          --Do something AFTER the elimination is processed (To do before, listen to the player eliminated event in the TI4_EVENT_HELPER)
+      },
+      OTHERS = {}
+    },
+    include = {
+      ME = {},
+      OTHERS = {}
+    }
+  },
 
   --internal fields
   -- - color (string) or nil if not in use.
@@ -1485,11 +1503,17 @@ end
 
 function _factionIsValid(faction)
   --
+  local function _isValidGet(getter)
+    assert(type(getter) == "table" and getter.func and type(getter.func) == "string")
+    getter.guid = assert(getter.guid or getter.obj ~= nil and getter.obj.getGUID())
+    return true
+  end
   local function varIsGettable(var)
     local isGet = type(var) == "table" and var.GET
     if isGet then
       assert(var.default ~= nil, "You must define a default return value for getters")
       assert(var.func and type(var.func) == "string")
+      var.guid = assert(var.guid or var.obj ~= nil and var.obj.getGUID())
     end
     return isGet
   end
@@ -1542,6 +1566,59 @@ function _factionIsValid(faction)
     local units = varIsGettable(faction.units) and faction.units.default or faction.units
     if not units or type(units) ~= 'table' then
         return false, 'faction.units must be a table'
+    end
+
+    if faction.heroAbility then
+      local heroAbility = varIsGettable(faction.heroAbility) and faction.heroAbility.default or faction.heroAbility
+    end
+
+    if faction.elimInstructions then
+      local elim = faction.elimInstructions
+      if type(elim) ~= "table" then return false, 'elimination instructions must be a table.' end
+      local function _validateElim(data)
+        if data.names then
+          data.names = type(data.names) == "table" and data.names or {data.names}
+        end
+        if data.guids then
+          data.guids = type(data.guids) == "table" and data.guids or {data.guids}
+        end
+        if data.GET and not _isValidGet(data.GET) then
+          return false, 'Bad table format for .GET'
+        end
+
+        return true
+      end
+
+      if elim.ignore then
+        if elim.ignore.ME then
+          local isValid, reason = _validateElim(elim.ignore.ME)
+          if not isValid then return false, "Invalid elimInstructions.ignore.ME: "..reason end
+        end
+        if elim.ignore.OTHERS then
+          local isValid, reason = _validateElim(elim.ignore.OTHERS)
+          if not isValid then return false, "Invalid elimInstructions.ignore.OTHERS: "..reason end
+        end
+      end
+      if elim.include then
+        if elim.include.ME then
+          local isValid, reason = _validateElim(elim.include.ME)
+          if not isValid then return false, "Invalid elimInstructions.include.ME: "..reason end
+        end
+        if elim.include.OTHERS then
+          local isValid, reason = _validateElim(elim.include.OTHERS)
+          if not isValid then return false, "Invalid elimInstructions.include.OTHERS: "..reason end
+        end
+      end
+      if elim.DO and not _isValidGet(elim.DO) then
+        return false, 'Bad table format for elimInstructions.DO'
+      end
+    end
+
+    if faction.eliminationQuotes then
+      faction.eliminationQuotes = type(eliminationQuotes) == "table" and faction.eliminationQuotes or {faction.eliminationQuotes}
+      for _,each in ipairs(faction.eliminationQuotes) do
+        if type(each) ~= "string" then return false, 'faction elimination quotes must be strings' end
+      end
     end
 
     return true

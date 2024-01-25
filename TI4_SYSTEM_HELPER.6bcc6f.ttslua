@@ -992,8 +992,8 @@ local systemFormat = {
 --[[Planet table attributes:
 local planetTable = {
   name = "string",
-  resources = #, or table for dynamic values{obj = self, func = "getResources", default = #},--params: {planet = "name", resources = true} --return #
-  influence = #, or table for dynamic values{obj = self, func = "getInfluence", default = #},--params: {planet = "name", influence = true} --return #
+  resources = #, --or table for dynamic values{guid = self.getGUID(), func = "getResources", default = #},--params: {planet = "name", resources = true} --return #
+  influence = #, --or table for dynamic values{guid = self.getGUID(), func = "getInfluence", default = #},--params: {planet = "name", influence = true} --return #
   trait = "", --string: "cultural",|"industrial",|"hazardous", --multi-trait planets not supported (queue sad titan noise)
   tech = "", --string "red",|"green",|"yellow",|"blue",
   legendary = false, --true,
@@ -1002,6 +1002,7 @@ local planetTable = {
   ----uncommon overrides
   --position = {x,z}, --local space
   --radius = #, --local space
+  --planetDecal = "url",--for token planets(Mirage)
 }
 --]]
 -- @param system: system table.
@@ -1027,12 +1028,14 @@ function injectSystem(system)
     for _,eachPlanet in ipairs(system.planets or {}) do
       if type(eachPlanet.resources) == "table" then
         assert(type(eachPlanet.resources.func) == "string")
+        eachPlanet.resources.guid = assert(eachPlanet.resources.guid or eachPlanet.resources.obj ~= nil and eachPlanet.resources.obj.getGUID())
         _dynamicPlanetValues[eachPlanet.name] = _dynamicPlanetValues[eachPlanet.name] or {}
         _dynamicPlanetValues[eachPlanet.name].resources = {callData = copyTable(eachPlanet.resources), lastResult = 0}
         eachPlanet.resources = eachPlanet.resources or 0
       end
       if type(eachPlanet.influence) == "table" then
         assert(type(eachPlanet.influence.func) == "string")
+        eachPlanet.influence.guid = assert(eachPlanet.influence.guid or eachPlanet.influence.obj ~= nil and eachPlanet.influence.obj.getGUID())
         _dynamicPlanetValues[eachPlanet.name] = _dynamicPlanetValues[eachPlanet.name] or {}
         _dynamicPlanetValues[eachPlanet.name].influence = {callData = copyTable(eachPlanet.influence), lastResult = 0}
         eachPlanet.influence = eachPlanet.influence.default or 0
@@ -1081,7 +1084,7 @@ function injectWormhole(params)
   local wormholeConnection = {
     names = {capsName.." Wormhole Token"},
     advancedSearch = {
-      FIND = {obj = self, func = "getPrintedWormholeSystems_inPlay", params = {type = name}}
+      FIND = {func = "getPrintedWormholeSystems_inPlay", params = {type = name}, guid = self.getGUID(), obj = self}
     },
     connectsTo = connections
   }
@@ -1195,6 +1198,11 @@ function injectConnectionRule(params)
   assert(params and type(params) == "table")
   assert(params.id and type(params.id) == 'string', "Your connection rule must have a unique id")
   assert(params.sources and type(params.sources) == "table", "Your connection rule must have a source to define when it should be applied")
+  local function _validateGET(getter)
+    assert(getter and type(getter) == "table" and getter.func and type(getter.func) == "string")
+    getter.guid = assert(getter.guid or getter.obj ~= nil and type(getter.obj) == "userdata" and getter.obj.getGUID())
+  end
+
   local rule = copyTable(params)
 
   local isValidTarget = {["OWNER"] = true, ["OTHERS"] = true, ["ALL"] = true, ["GET"] = true}
@@ -1202,7 +1210,7 @@ function injectConnectionRule(params)
   for _,each in ipairs(validateSources) do
     assert(each.targetType and isValidTarget[each.targetType])
     if each.targetType == "GET" then
-      assert(each.getTarget and type(each.getTarget) == "table" and type(each.getTarget.func) == "string")
+      _validateGET(each.getTarget)
     end
   end
 
@@ -1226,9 +1234,7 @@ function injectConnectionRule(params)
       assert(each.connectsTo, "Connection objects must define what they connectTo")
       local t = type(each.connectsTo)
       assert(t == "string" or t == "table")
-      if t == "GET" then
-        assert(each.getConnections and type(each.getConnections) == "table" and type(each.getConnections.func) == "string")
-      end
+      if t == "GET" then _validateGET(each.getConnections) end
     end
   end
 
@@ -1239,12 +1245,12 @@ function injectConnectionRule(params)
       assert(each.systems)
       local t = type(each.systems)
       assert(t == "string" or t == "table")
-      if t == "GET" then assert(each.getSystems and type(each.getSystems) == "table" and type(each.getSystems.func) == "string") end
+      if t == "GET" then _validateGET(each.getSystems) end
 
       assert(each.connectsTo)
       t = type(each.connectsTo)
       assert(t == "string" or t == "table")
-      if t == "GET" then assert(each.getConnections and type(each.getConnections) == "table" and type(each.getConnections.func) == "string") end
+      if t == "GET" then _validateGET(each.getConnections) end
     end
   end
 
@@ -1255,7 +1261,7 @@ function injectConnectionRule(params)
       assert(each.targetConnections)
       local t = type(each.targetConnections)
       assert(t == "string" or t == "table")
-      if t == "GET" then assert(each.getTargetConnections and type(each.getTargetConnections) == "table" and type(each.getTargetConnections.func) == "string") end
+      if t == "GET" then _validateGET(each.getTargetConnections) end
 
       assert(each.mutate and type(each.mutate) == "table" and type(each.mutate.func) == "string")
     end
@@ -3353,9 +3359,12 @@ end
 
 function tryCall(callData, params)
   local function try()
+    --validate
     assert(callData and type(callData) == "table")
-    assert(callData.obj ~= nil and type(callData.obj) == "userdata")
+    callData.obj = assert(callData.obj ~= nil and callData.obj or getObjectFromGUID(callData.guid))
+    assert(callData.obj ~= nil and type(callData.obj) == "userdata", "callback obj could not be found")
     assert(callData.func and type(callData.func) == "string" and callData.obj.getVar(callData.func), 'missing ' .. callData.obj.getName() .. '.' .. callData.func)
+    --build params
     local passParams = params == nil and {} or type(params) == "table" and params or {params}
     local dataParams = callData.params == nil and {} or type(callData.params) == "table" and callData.params or {callData.params}
     local mergedParams = {} --params will overide callData.params values that have the same key
@@ -3365,10 +3374,11 @@ function tryCall(callData, params)
       else mergedParams[k] = v
       end
     end
+    --call
     return callData.obj.call(callData.func, mergedParams)
   end
   local success, result = pcall(try)
-  if not success then print("Failed callback: callData incorrectly formated. ", result) return end
+  if not success then print("Failed callback: callData incorrectly formated: ", result) return end
   return result
 end
 

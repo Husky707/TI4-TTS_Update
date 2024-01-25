@@ -144,7 +144,7 @@ local customGameEffect = {
       --If this source is active/in play, who will it effect?
       targetType = "OWNER"|"OTHERS"|"ALL"|"GET", --"OTHERS" == NOT OWNER
       --If target is "GET", you must include getTarget
-      --getTarget = {obj = self, func = "myTargetFuncName"},
+      --getTarget = {func = "myTargetFuncName", guid = self.getGUID(), (or) obj = self},
         --params: {context, id = "id of this gameEffect", objs = _foundObjects, abilities = _activeAbilityOwners}
         --return: nil or table{name = "", targets = {[color] = true/#}} --each target color is a [key] =eqaul to the number of times this source should apply to that player
 
@@ -152,7 +152,7 @@ local customGameEffect = {
       targetExcludes = {
         PROMISSORY = {"PromissoryName",},-- Finds the faction with this note and excludes it
         FACTION_ABILITY = {"AbilityName"},
-        GET = {obj = self, func = ""}
+        GET = {guid = self.getGUID(), func = ""}
           --params: {color ="colorInQuestion", context, id, objs = _foundObjects, abilities = _activeAbilityOwners}
           --return: boolean; true to exclude color target
       },
@@ -238,6 +238,7 @@ function _validateSource(source)
 
   local function validateGET(getter)
     assert(type(getter) == "table" and getter.func and type(getter.func) == "string")
+    getter.guid = assert(getter.guid or getter.obj ~= nil and type(getter.obj) == "userdata" and getter.obj.getGUID())
   end
 
   --validate context
@@ -669,9 +670,12 @@ end
 
 function tryCall(callData, params)
   local function try()
+    --validate
     assert(callData and type(callData) == "table")
-    assert(callData.obj ~= nil and type(callData.obj) == "userdata")
+    callData.obj = assert(callData.obj ~= nil and callData.obj or getObjectFromGUID(callData.guid))
+    assert(callData.obj ~= nil and type(callData.obj) == "userdata", "callback obj could not be found")
     assert(callData.func and type(callData.func) == "string" and callData.obj.getVar(callData.func), 'missing ' .. callData.obj.getName() .. '.' .. callData.func)
+    --build params
     local passParams = params == nil and {} or type(params) == "table" and params or {params}
     local dataParams = callData.params == nil and {} or type(callData.params) == "table" and callData.params or {callData.params}
     local mergedParams = {} --params will overide callData.params values that have the same key
@@ -681,10 +685,11 @@ function tryCall(callData, params)
       else mergedParams[k] = v
       end
     end
+    --call
     return callData.obj.call(callData.func, mergedParams)
   end
   local success, result = pcall(try)
-  if not success then print("Failed callback: callData incorrectly formated. ", result) return end
+  if not success then print("Failed callback: callData incorrectly formated: ", result) return end
   return result
 end
 

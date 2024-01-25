@@ -37,7 +37,7 @@ end
 
 local _abilityHelper = getHelperClient('TI4_ABILITY_HELPER')
 local _deckHelper = getHelperClient('TI4_DECK_HELPER')
---local _eliminationHelper = getHelperClient('TI4_ELIMINATION_HELPER')
+local _eliminationHelper = getHelperClient('TI4_ELIMINATION_HELPER')
 local _factionHelper = getHelperClient('TI4_FACTION_HELPER')
 local _systemHelper = getHelperClient('TI4_SYSTEM_HELPER')
 local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
@@ -78,6 +78,56 @@ local _skipReadySet = {}--skips only the NEXT ready, not all future readies
 local _customRepairables = {names = {}, guids = {}}
 local _nonRepairables = {names = {}, guids = {}}
 local _skipRepairs = {names = {}, guids = {}}
+
+--Public funcs------------------------------------------------------------------
+
+function returnStrategyCards(ignoreStability)
+
+end
+
+--params: "CardName" or {name = "", ignoreStability = true}
+function returnStrategyCard(params)
+
+end
+
+--returns: STRATEGY_CARD_INITIATIVE {["cardName"] = #(initiative)} unless a mask is given
+--mask return: {["cardName"] = {obj = objRef, i = #(initiative), heldBy = "color"}}
+--masks: "TABLE"|"HELD"|"UNPICKED" Optionaly use a mask to get card
+function getStrategyCards(mask)
+  if not mask then
+    return copyTable(STRATEGY_CARD_INITIATIVE)
+  end
+  local existingStrats = {}
+  local switch = {
+    ["TABLE"] = function() return existingStrats end,
+    ["HELD"] = function()
+      local heldSet = {}
+      for name,each in pairs(existingStrats) do
+        if each.heldBy then heldSet[name] = each end
+      end
+      return heldSet
+    end,
+    ["UNPICKED"] = function()
+      local result = {}
+      for name, each in pairs(existingStrats) do
+        if not each.heldBy then result[name] = each end
+      end
+      return result
+    end
+  }
+  assert(switch[mask], "Caught bad mask case >"..mask.."< in getStrategyCards(mask)")
+  for _,eachObj in ipairs(getAllObjects()) do
+    local oName = eachObj.getName()
+    if STRATEGY_CARD_INITIATIVE[oName] then
+      existingStrats[oName] = {
+        heldBy = _zoneHelper.zoneFromPosition(eachObj.getPosition()),
+        i = STRATEGY_CARD_INITIATIVE[oName],
+        obj = eachObj
+      }
+    end
+  end
+  return switch[mask]()
+end
 
 ---Injection--------------------------------------------------------------------
 
