@@ -857,22 +857,19 @@ local factionFormat = {
     --return true to purge the card
 
   --eliminationQuotes = "String" or table of {"Strings",...}(will be randomly chosen)
-  elimInstructions = { --ME means this faction was eliminated, OTHERS means another faction was elim'd
-    --All ME and OTHER tables are formatted the same
+  elimInstructions = {--Only resolved whan an elim is automated (not just declared)
+    DO = {guid = self.getGUID(), func = "doFuncName"},--no return.--Do something BEFORE the elimination is resolved
     ignore = {
+    --ME means this faction was eliminated, OTHERS means another faction was elim'd
+    --All ME and OTHER tables are formatted the same
       ME = {
         names = {}, --"string" or table of {"strings"}. Objects with these names will not be returned
         guids = {}, --"guid" or table of {"guids"}. Objects with these guids will not be returned
-        get = {guid = self.getGUID(), func = "getFuncName"},--params:{color}, return: {names = {}, guids = {}}
-        do = {guid = self.getGUID(), func = "doFuncName"},--no return.
-          --Do something AFTER the elimination is processed (To do before, listen to the player eliminated event in the TI4_EVENT_HELPER)
+        GET = {guid = self.getGUID(), func = "getFuncName"},--params:{color}, return: {names = {}, guids = {}}
       },
       OTHERS = {}
     },
-    include = {
-      ME = {},
-      OTHERS = {}
-    }
+    include = { ME = {}, OTHERS = {}}
   },
 
   --internal fields

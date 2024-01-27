@@ -90,11 +90,11 @@ function returnStrategyCard(params)
 
 end
 
---returns: STRATEGY_CARD_INITIATIVE {["cardName"] = #(initiative)} unless a mask is given
---mask return: {["cardName"] = {obj = objRef, i = #(initiative), heldBy = "color"}}
---masks: "TABLE"|"HELD"|"UNPICKED" Optionaly use a mask to get card
-function getStrategyCards(mask)
-  if not mask then
+--returns: STRATEGY_CARD_INITIATIVE {["cardName"] = #(initiative)} unless a filter is given
+--filter return: {["cardName"] = {obj = objRef, i = #(initiative), heldBy = "color"}}
+--filters: "TABLE"|"HELD"|"UNPICKED"
+function getStrategyCards(filter)
+  if not filter then
     return copyTable(STRATEGY_CARD_INITIATIVE)
   end
   local existingStrats = {}
@@ -115,7 +115,7 @@ function getStrategyCards(mask)
       return result
     end
   }
-  assert(switch[mask], "Caught bad mask case >"..mask.."< in getStrategyCards(mask)")
+  assert(switch[filter], "Caught bad filter case >"..filter.."< in getStrategyCards(filter)")
   for _,eachObj in ipairs(getAllObjects()) do
     local oName = eachObj.getName()
     if STRATEGY_CARD_INITIATIVE[oName] then
@@ -126,7 +126,7 @@ function getStrategyCards(mask)
       }
     end
   end
-  return switch[mask]()
+  return switch[filter]()
 end
 
 ---Injection--------------------------------------------------------------------
