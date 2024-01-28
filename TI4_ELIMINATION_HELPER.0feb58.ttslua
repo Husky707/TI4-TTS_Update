@@ -7,6 +7,7 @@ function getHelperClient(helperObjectName)
     end
     return setmetatable({}, { __index = function(t, k) return getCallWrapper(k) end })
 end
+local _deckHelper = getHelperClient('TI4_DECK_HELPER')
 local _factionHelper = getHelperClient('TI4_FACTION_HELPER')
 local _stratHelper = getHelperClient('TI4_STRATEGY_CARD_HELPER')
 local _systemHelper = getHelperClient('TI4_SYSTEM_HELPER')
@@ -66,6 +67,16 @@ local Elim = {
   colors = zoneColors,
   factions = unpackedFactions,
 --]]}
+local SecretMat = {
+  megaTokens = {},--[color] = {obj, guid}
+  _tokenSize = false,
+
+  mat = nil,--matObjRef
+  guid = false,
+  bounds = {},--min = {x,y}, max = {x,y}
+  isInit = false,
+  _updated = false,--will re-check obj positions once each frame when called
+}
 
 --Public getters----------------------------------------------------------------
 --!querying these functions during game load from a save will likely yeild no results, wait a frame for this script to update
@@ -422,6 +433,10 @@ Elim.Resolve = function(elimPlayer)
   Elim.misc = {}
   Elim.containers = {}
   Elim.speakerToken = {}
+  Elim.secrets = {}
+  Elim.secretsMat = {}
+  Elim.agendas = {}
+  Elim.agendasMat = {}
 
   _elimInProgress = Elim.target
 
@@ -526,7 +541,7 @@ Elim.Resolve = function(elimPlayer)
     end
   end
 
-  local containers = {}
+  local containers = {["Agendas/Laws Mat"] = "Agendas"}
   local units = {}
   local proms = {}
   --build objectName sets that include a player color: [name] = color
@@ -565,6 +580,13 @@ Elim.Resolve = function(elimPlayer)
   local strats = _stratHelper.getStrategyCards()
   for _,each in pairs(strats or {}) do each = true end --cast to boolean
 
+  local _sList = _deckHelper.getCardsWithSource({deckName = "Secret Objectives"}) or {}
+  local secrets = {}
+  for k,v in ipairs(_sList) do
+    secrets[v] = true
+  end
+  local agendas = _deckHelper.getCardsWithSource({deckName = "Agenda"}) or {}
+
   --Step 2. Search the table for objects of interest and save the objReference
     --Generally saved in a list as,{name = "", guid = "", obj = objRef, color = colorOwner}
 
@@ -586,6 +608,12 @@ Elim.Resolve = function(elimPlayer)
     elseif strats[name] then
       local isInZone = _zoneHelper.zoneFromPosition(obj.getPosition())
       if isInZone == Elim.target then table.insert(Elim.strats, {name = name, guid = guid, obj = obj}) end--Elim.strats[guid] = obj end
+      return
+    elseif agendas[name] then
+      table.insert(Elim.agendas, {name = name, guid = guid, obj = obj})
+      return
+    elseif secrets[name] then
+      table.insert(Elim.secrets, {name = name, guid = guid, obj = obj})
       return
     elseif name == "Speaker Token" and _boundingBoxContains(Elim.targetZone.boundingBox, obj.getPosition())then
       Elim.speakerToken = {guid = guid, obj = obj}
@@ -644,10 +672,14 @@ Elim.Resolve = function(elimPlayer)
     coroutine.yield(0)
 
     --Return secrets
+    Elim.discardSecrets()
+    coroutine.yield(0)
 
     --Discard agendas
 
     --Discard action cards
+    Elim.discardActions()
+    coroutine.yield(0)
 
     --Handle faction specific
 
@@ -878,6 +910,7 @@ Elim.returnCommandTokens = function()
     safePrint("ALL", "|   Success: Returned ".._count.." tokens.","Yellow")
 end
 
+--!toDo Find fighter stacks
 Elim.returnUnits = function()
   if not Elim.units or not next(Elim.units) then
     safePrint("ALL", "|!FAILED! Did not locate any units.", "RED")
@@ -989,6 +1022,207 @@ Elim.returnStrats = function()
   coroutine.yield(0)
 end
 
+Elim.discardActions = function()
+  safePrint("ALL", "|\n|~Discarding action cards...", "Yellow")
+  coroutine.yield(0)
+  local _logCards = {"| "}
+  local _errCards = {"| "}
+  local handObjs = Elim.getHands()--[guid] = handColor
+  local _count = 0
+  for each,color in pairs(handObjs or {}) do
+    if color == Elim.target then
+      local obj = getObjectFromGUID(each)
+      local oName = obj ~= nil and obj.getName()
+      if obj ~= nil and _deckHelper.getDeckName(oName) == "Actions" then
+        _count = _count + 1
+        if safeDiscardFromHand({name = oName, guid = each, obj = obj, order = _count}) == false then
+          table.insert(_errCards, oName) else table.insert(_logCards, oName)
+        end
+        Coru.yieldFor(4)()
+      end
+    end
+  end
+  safePrint("ALL", "|   Found and discarded "..(#_logCards -1).." cards:", "Yellow")
+  safePrint("ALL", table.concat(_logCards, " - "), "Yellow")
+  if #_errCards > 1 then
+    safePrint("ALL", "!ERROR! "..(#_errCards).." failed to discard:", "Red")
+    safePrint("ALL", table.concat(_errCards, " - "), "Red")
+  end
+end
+
+Elim.discardSecrets = function()
+  safePrint("ALL", "|\n|~Discarding scored and unscored secret objectives...", "Yellow")
+  coroutine.yield(0)
+  local _publicLog = {"|     Scored/Face-up secrets:\n| "}
+  local _privateCount = 0
+  local _errCards = {"| "}
+  local _count = 0
+
+  --Discard secretly from hand
+  local handObjs = Elim.getHands()--[guid] = handColor
+  for each,color in pairs(handObjs or {}) do
+    if color == Elim.target then
+      local obj = getObjectFromGUID(each)
+      local oName = obj ~= nil and obj.getName()
+      if obj ~= nil and _deckHelper.getDeckName(oName) == "Secret Objectives" then
+        _count = _count + 1
+        --if safeDiscardFromHand(oName, each) then _privateCount = _privateCount + 1 else table.insert(_errCards, each) end
+        if safeDiscardFromHand({name = oName, guid = each, obj = obj, order = _count, shuffle = true}) == false then table.insert(_errCards, each) else _privateCount = _privateCount + 1 end
+        Coru.yieldFor(8)()
+      end
+    end
+  end
+
+  coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+  local function processSecret(cardData)
+    local oPos = cardData.obj.getPosition()
+    --in play area
+    if _boundingBoxContains(Elim.targetZone.boundingBox, oPos) then
+      _count = _count + 1
+      if cardData.obj.is_face_down then
+        _privateCount = _privateCount + 1
+      else
+        table.insert(_publicLog, cardData.name)
+      end
+      if safeDiscardFromHand({name = cardData.name, guid = cardData.guid, obj = cardData.obj, order = _count, shuffle = true}) == false then
+        table.insert(_errCards, cardData.guid)
+      else
+        Coru.yieldFor(8)()
+      end
+      coroutine.yield(0)
+      return
+    end
+    --on mat
+    if SecretMat.contains(oPos, Elim.target) then
+      _count = _count + 1
+      if safeDiscardFromHand({name = cardData.name, guid = cardData.guid, obj = cardData.obj, order = _count, shuffle = true}) == false then
+        table.insert(_errCards, cardData.guid)
+      else
+        table.insert(_publicLog, cardData.name)
+        Coru.yieldFor(8)()
+      end
+      coroutine.yield(0) coroutine.yield(0)
+      return
+    end
+  end
+
+  --else find secrets on mat and in play area
+  for _,each in ipairs(Elim.secrets) do
+    each.obj = each.obj ~= nil and each.obj or getObjectFromGUID(each.guid) --make sure obj ref is still good
+    if each.obj ~= nil then
+      processSecret(each)
+    end
+  end
+
+  local totalCount = #_publicLog -1 + _privateCount
+  --delayed shuffle secret deck
+  --[[if totalCount > 1 then
+    Coru.wait(2, function()
+      local _sDeck = _deckHelper.getDeck("Secret Objectives")
+      if _sDeck then _sDeck.shuffle() end
+      safePrint("ALL", "Secret deck shuffled.", "Grey")
+    end)
+  end--]]
+  safePrint("ALL", "|   Found and discarded "..(totalCount).." cards:", "Yellow")
+  if #_publicLog > 1 then safePrint("ALL", table.concat(_publicLog, " - "), "Yellow") end
+  if _privateCount > 0 then safePrint("ALL", "|   Found and discarded ".._privateCount.." unscored secrets", "Orange") end
+  if #_errCards > 1 then
+    safePrint("ALL", "!ERROR! "..(#_errCards).." failed to discard! Card GUIDS:", "Red")
+    safePrint("ALL", table.concat(_errCards, " - "), "Red")
+  end
+  if SecretMat.isInit and SecretMat.mat == nil then
+    safePrint("ALL","!WARNING! Could not find the 'Secrets Mat', some secrets may have been missed.", "Orange")
+  end
+end
+
+--!_WARNING_! Rotating the Secret Mat will yield erronious results
+--if columnColor is ommitted, will return true if obj is anywhere on the mat
+SecretMat.contains = function(objPosition, columnColor)
+  if not SecretMat.isInit then SecretMat.init() end
+  if SecretMat.mat == nil then
+    if SecretMat._updated then return false end
+    SecretMat.mat = SecretMat.guid and getObjectFromGUID(SecretMat.guid) or false
+    if not SecretMat.mat then SecretMat._updated = true return false end
+  end
+  if not SecretMat._updated then --refresh bounds positions
+    SecretMat._updated = true
+    Wait.frames(function() SecretMat._updated = false end, 5)
+    for eachCol,token in pairs(SecretMat.megaTokens) do
+      token.obj = token.obj ~= nil and token.obj or getObjectFromGUID(token.guid)
+      if token.obj == nil then SecretMat.megaTokens[eachCol] = nil end
+      token.pos = token.obj.getPosition()
+    end
+  end
+  if columnColor and not SecretMat.megaTokens[columnColor] then return false end
+
+  local _zBounds = { --Are we looking in a specific column, or looking for anywhere on the mat?
+    min = columnColor and SecretMat.megaTokens[columnColor].pos.z - SecretMat._tokenSize.z or SecretMat.bounds.min.z,
+    max = columnColor and SecretMat.megaTokens[columnColor].pos.z + SecretMat._tokenSize.z or SecretMat.bounds.max.z
+  }
+
+  return _boundingBoxContains({
+      min = {x = SecretMat.bounds.min.x, z = _zBounds.min},
+      max = {x = SecretMat.bounds.max.x, z = _zBounds.max}
+    }, objPosition)
+end
+
+SecretMat.init = function()
+  SecretMat.mat = nil
+  SecretMat.bounds = {}
+  SecretMat.megaTokens = {}
+  local _factions = _factionHelper.allFactions() or {}
+  local _tokenNames = {}--[name] = color
+  local _foundTokens = {}--[color] = {}
+  for color,eachFaction in pairs(_factions) do
+    _tokenNames[eachFaction.tokenName .. " Owner Token"] = color
+    _foundTokens[color] = {}
+  end
+  for _,eachObj in ipairs(getAllObjects()) do
+    local oName = eachObj.getName()
+    if oName == "Secrets Mat" then
+      SecretMat.mat = eachObj
+      SecretMat.guid = eachObj.getGUID()
+    elseif _tokenNames[oName] then
+      table.insert(_foundTokens[_tokenNames[oName]], eachObj)
+    end
+  end
+
+  if SecretMat.mat == nil then return end
+  local _matTransform = SecretMat.mat.getBoundsNormalized()
+  local _bounds = {min = {}, max = {}}
+  _bounds.min.x = _matTransform.center.x - _matTransform.size.x
+  _bounds.min.z = _matTransform.center.z - _matTransform.size.z
+  _bounds.max.x = _matTransform.center.x + _matTransform.size.x
+  _bounds.max.z = _matTransform.center.z + _matTransform.size.z
+  SecretMat.bounds = _bounds
+
+  local function _getColorMegaToken(color, tokenList)
+    for _,eachObj in ipairs(tokenList) do
+      local scl = eachObj.getScale()
+      if scl.x > 3 and _boundingBoxContains(SecretMat.bounds, eachObj.getPosition()) then
+        if not SecretMat._tokenSize then
+          local bndz = eachObj.getBoundsNormalized()
+          SecretMat._tokenSize = {x = bndz.size.x + 1, z = bndz.size.z + 1}
+        end
+        SecretMat.megaTokens[color] = {guid = eachObj.getGUID(), obj = eachObj}
+        return
+      end
+    end
+  end
+  for eachCol,tokens in pairs(_foundTokens) do
+    _getColorMegaToken(eachCol, tokens)
+  end
+  SecretMat.isInit = true
+end
+
+function onPlayerChangeColor(player_color)
+  SecretMat.isInit = false
+end
+
+function onFactionUnpacked(params)
+  SecretMat.isInit = false
+end
+
 --------------------------------------------------------------------------------
 --printToAll and broadcastToAll sometimes throw erros if a player is not seated
 --players = "ALL" or "color" or table of Cols
@@ -1036,6 +1270,50 @@ function safeBroadcast(players, msg, txtCol)
   for _,each in ipairs(targets) do
     broadcastToColor(msg, each, txtCol == "MATCH" and each or txtCol)
   end
+end
+
+--params = "cardGUID" or {name, guid, obj, order, shuffle, fromHand}
+function safeDiscard(params)
+  if type(params) == "string" then
+    local obj = getObjectFromGUID(params)
+    if not obj then return false end
+    params = {obj = obj, name = obj.getName(), guid = params}
+  end
+  local function _discard()
+    _deckHelper.discardCard({name = params.name, guid = params.guid, index = params.order, shuffleOnDiscard = params.shuffle})
+  end
+  if params.fromHand then return safeDiscardFromHand(params) end
+  local success, result = pcall(_discard)
+  return success
+end
+
+--params = "cardGUID" or {name, guid, obj, order, shuffle, fromHand}
+function safeDiscardFromHand(params)
+  if type(params) == "string" then
+    local obj = getObjectFromGUID(params)
+    if not obj then return false end
+    params = {obj = obj, name = obj.getName(), guid = params}
+  end
+
+  params.obj.use_hands = false
+  local function _discard()
+    _deckHelper.discardCard({name = params.name, guid = params.guid, index = params.order, shuffleOnDiscard = params.shuffle})
+  end
+
+  --Coru.wait(2, function() if params.obj ~= nil then params.obj.use_hands = true end end)
+
+  ---[[
+  local _disCo = coroutine.create(function()
+    params.obj.use_hands = false
+    coroutine.yield(0)
+
+    local success, result = pcall(_discard)
+    if not success then params.obj.use_hands = true return false end
+
+    Coru.yieldFor(5)
+    params.obj.use_hands = true
+  end)
+  Coru.run(_disCo)--]]
 end
 
 -------------------------------------------------------------------------------
@@ -1113,6 +1391,14 @@ Coru.wait = function(t, callback)
 
   Coru.run(newWait, {callback = callback})
   return newWait
+end
+
+Coru.yieldFor = function(frames)
+  local function _newYeild()
+    local _frames = 0
+    while _frames < frames do _frames = _frames + 1 coroutine.yield(0) end
+  end
+  return _newYeild
 end
 -------------------------------------------------------------------------------
 function copyTable(t)
