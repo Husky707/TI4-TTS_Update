@@ -13,6 +13,7 @@ local _stratHelper = getHelperClient('TI4_STRATEGY_CARD_HELPER')
 local _systemHelper = getHelperClient('TI4_SYSTEM_HELPER')
 local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
 local Events = getHelperClient('TI4_EVENT_HELPER')
+local SecretMat = getHelperClient('Secrets Mat')
 
 local Coru = {
  _coroutines = {},
@@ -67,16 +68,6 @@ local Elim = {
   colors = zoneColors,
   factions = unpackedFactions,
 --]]}
-local SecretMat = {
-  megaTokens = {},--[color] = {obj, guid}
-  _tokenSize = false,
-
-  mat = nil,--matObjRef
-  guid = false,
-  bounds = {},--min = {x,y}, max = {x,y}
-  isInit = false,
-  _updated = false,--will re-check obj positions once each frame when called
-}
 
 --Public getters----------------------------------------------------------------
 --!querying these functions during game load from a save will likely yeild no results, wait a frame for this script to update
@@ -564,7 +555,7 @@ Elim.Resolve = function(elimPlayer)
     if Elim.factions[color] then
       units[Elim.factions[color].flagship] = color
       local allyName = Elim.factions[color].shortName or Elim.factions[color].frankenName
-      proms[allyName .. " Alliance"] = color
+      proms[(allyName .. " Alliance")] = color
       for _,eachNote in ipairs(Elim.factions[color].promissoryNotes or {}) do
         proms[eachNote] = color
       end
@@ -664,14 +655,14 @@ Elim.Resolve = function(elimPlayer)
     Elim.returnProms()
     coroutine.yield(0)
 
-    --Others reclaim proms from elim'd player
+    --Others reclaim their own proms from elim'd player
     Elim.reclaimProms()
     coroutine.yield(0)
 
     Elim.returnStrats()
     coroutine.yield(0)
 
-    --Return secrets
+    --Return secrets (even scored ones)
     Elim.discardSecrets()
     coroutine.yield(0)
 
@@ -681,7 +672,7 @@ Elim.Resolve = function(elimPlayer)
     Elim.discardActions()
     coroutine.yield(0)
 
-    --Handle faction specific
+    --Handle faction specific MISC items
 
     Events.invokeAsync({event = "resolvePlayerEliminated", params = {color = Elim.target}})
     coroutine.yield(0)
@@ -693,15 +684,13 @@ Elim.Resolve = function(elimPlayer)
   Coru.run(coru)
 end
 
---!todo: Find notes on the secrets mat
 --return elim player's proms
 Elim.returnProms = function()
   safePrint("ALL", "|\n|~Returning Promissory Notes...", "Yellow")
   coroutine.yield(0)
-  local _noteCount = 0
   local _printNotes = {["Grey"] = {"| "}} for _,eachColor in ipairs(Elim.colors) do _printNotes[eachColor] = {"| "} end
+  local _notesToReturn = {}
   local handObjs = Elim.getHands()--[guid] = handColor
-
   local _supportParnter = false --in case the note was copy pasted: 1 on secret mat, 1 in the play area. Prevents double logging
   local function _handleSFT(noteData)
     local function _broadcastSupport(supportColor)
@@ -711,31 +700,32 @@ Elim.returnProms = function()
         safeBroadcast("ALL", "! The "..supportColor.." has lost the "..Elim.target.." player's Support For The Throne !\nMove their score back on the score track", supportColor)
     end
 
+    local function _returnNote()
+      table.insert(_notesToReturn, noteData.obj)
+    end
+
     --is it in a player's play area?
     local _inZone = _boundingBoxContains(Elim.targetZone.boundingBox, noteData.obj.getPosition())
     if _inZone then
-      if _inZone == Elim.target then return end
-      --else
-      _noteCount = _noteCount + 1
+      if _inZone == Elim.target then _returnNote() return end
       _broadcastSupport(_inZone)
-      noteData.obj.deal(1, Elim.target)
-      coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
-      return
     end
 
     --In another player's hand?
     local _inHand = handObjs[noteData.guid] or false
     if _inHand then
-      if _inHand == Elim.target then return end
+      if _inHand == Elim.target then _returnNote() return end
       _broadcastSupport(_inHand)
-      _noteCount = _noteCount + 1
-      noteData.obj.deal(1, Elim.target)
-      coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
-      return
     end
 
     --on the secrets mat?
+    local _matColor = SecretMat.contains(noteData.guid)
+    if _matColor then
+      if _matColor == "Grey" or _matColor == Elim.target then _returnNote() return end
+      _broadcastSupport(_matColor)
+    end
 
+    _returnNote()
   end
 
   local function _logNote(noteData)
@@ -743,10 +733,8 @@ Elim.returnProms = function()
     if _inHand then
       if _inHand == Elim.target then return end
 
-      _noteCount = _noteCount + 1
       table.insert(_printNotes[_inHand], noteData.name)
-      noteData.obj.deal(1, Elim.target)
-      coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+      table.insert(_notesToReturn, noteData.obj)
       return
     end
 
@@ -755,20 +743,17 @@ Elim.returnProms = function()
 
     local _inZone = _zoneHelper.zoneFromPosition(objPos)
     if _inZone then
-      _noteCount = _noteCount + 1
       table.insert(_printNotes[_inZone], noteData.name)
-      noteData.obj.deal(1, Elim.target)
-      coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+      table.insert(_notesToReturn, noteData.obj)
       return
     end
 
     --else its in an unknown location
-    _noteCount = _noteCount + 1
     table.insert(_printNotes["Grey"], noteData.name)
-    noteData.obj.deal(1, Elim.target)
-    coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+    table.insert(_notesToReturn, noteData.obj)
   end
 
+  --find target's notes
   for _,eachNote in ipairs(Elim.proms) do
     if eachNote.color == Elim.target then
       --make sure the objRef is still live
@@ -782,8 +767,14 @@ Elim.returnProms = function()
       end
     end
   end
+  --move to play area
+  for _,eachNote in ipairs(_notesToReturn) do
+    eachNote.deal(1, Elim.target)
+    coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+  end
+
   --printResult
-  safePrint("ALL", "|   Found and returned ".._noteCount.." notes:", "Yellow")
+  safePrint("ALL", "|   Found and returned "..#_notesToReturn.." notes:", "Yellow")
   for eachCol,found in pairs(_printNotes) do
     if #found > 1 then
       safePrint("ALL", table.concat(found, " - "), eachCol)
@@ -791,44 +782,53 @@ Elim.returnProms = function()
   end
 end
 
---!todo --Find on secrets mat
 --other players get their proms back
 Elim.reclaimProms = function()
   safePrint("ALL", "|\n|~Returning other players\' Promissory Notes...", "Yellow")
   coroutine.yield(0)
-  local _noteCount = 0
   local _printNotes = {} for _,eachColor in ipairs(Elim.colors) do _printNotes[eachColor] = {"| "} end
-  local handObjs = Elim.getHands()--[guid] = handColor
+  local _notesToReturn = {}--[color] = {obj}
 
-  local function _logNote(noteData)
+  local handObjs = Elim.getHands()--[guid] = handColor
+  for _,eachColor in ipairs(Elim.colors) do _notesToReturn[eachColor] = {} end
+  local function _doReturnThisProm(noteData)
     local _inHand = handObjs[noteData.guid] or false
     if _inHand then
-      if _inHand ~= Elim.target then return end
-
-      _noteCount = _noteCount + 1
-      table.insert(_printNotes[noteData.color], noteData.name)
-      noteData.obj.deal(1, noteData.color)
-      coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
-      return
+      if _inHand ~= Elim.target then return false end
+      return true
     end
 
     if _boundingBoxContains(Elim.targetZone.boundingBox, noteData.obj.getPosition()) then
-      _noteCount = _noteCount + 1
-      table.insert(_printNotes[noteData.color], noteData.name)
-      noteData.obj.deal(1, noteData.color)
-      coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
-      return
-   end
+      return true
+    end
+
+    if SecretMat.columnContains({guid = noteData.guid, color = Elim.target}) then
+      return true
+    end
+
+    return false
   end
 
+  --get objects that need to be returned
   for _,eachNote in ipairs(Elim.proms) do
     if eachNote.color ~= Elim.target then
       --make sure the objRef is still live
       eachNote.obj = eachNote.obj ~= nil and eachNote.obj or getObjectFromGUID(eachNote.obj)
-      if eachNote.obj ~= nil then _logNote(eachNote) end
+      if eachNote.obj ~= nil and _doReturnThisProm(eachNote) then
+        table.insert(_printNotes[eachNote.color], eachNote.name)
+        table.insert(_notesToReturn, {eachNote.obj, eachNote.color})
+      end
     end
   end
-  safePrint("ALL", "|   Found and returned ".._noteCount.." notes", "Yellow")
+
+  --return objects
+  for _,eachNote in ipairs(_notesToReturn) do
+    eachNote[1].deal(1, eachNote[2])
+    coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+  end
+
+  --printResult
+  safePrint("ALL", "|   Found and returned "..#_notesToReturn.." notes", "Yellow")
   for eachCol,noteNames in pairs(_printNotes) do
     if #noteNames > 1 then --all colors have a prefix at i == i, ignore this
       safePrint("ALL", table.concat(noteNames, " - "), eachCol)
@@ -1010,15 +1010,15 @@ Elim.returnStrats = function()
 
   safePrint("ALL", "|\n|~Returning Strategy Card(s)...", "Yellow")
   coroutine.yield(0)
-  local _printStrats = {"|  Returned:"}
+  local _printStrats = {"|  Returned"}
   for _,eachStrat in ipairs(Elim.strats) do
     table.insert(_printStrats, eachStrat.name)
     _stratHelper.returnStrategyCard({name = eachStrat.name, ignoreStability = true})
     coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
   end
   --print result
-  local _comma = #_printStrats > 2 and ", " or " "
-  safePrint("ALL", table.concat(_printStrats, _comma), "Yellow")
+  if #_printStrats > 1 then safePrint("ALL", table.concat(_printStrats, " - "), "Yellow")
+  else safePrint("ALL", "|  None found", "Yellow") end
   coroutine.yield(0)
 end
 
@@ -1053,13 +1053,12 @@ end
 Elim.discardSecrets = function()
   safePrint("ALL", "|\n|~Discarding scored and unscored secret objectives...", "Yellow")
   coroutine.yield(0)
-  local _publicLog = {"|     Scored/Face-up secrets:\n| "}
-  local _privateCount = 0
+  local _publicLog = {"|   Face up secrets "}
   local _errCards = {"| "}
-  local _count = 0
+  local _cardsToReturn = {}
+  local _privateCount = 0
 
-  --Discard secretly from hand
-  local handObjs = Elim.getHands()--[guid] = handColor
+  --[[Discard secretly from hand
   for each,color in pairs(handObjs or {}) do
     if color == Elim.target then
       local obj = getObjectFromGUID(each)
@@ -1071,42 +1070,39 @@ Elim.discardSecrets = function()
         Coru.yieldFor(8)()
       end
     end
-  end
+  end--]]
 
-  coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+  local handObjs = Elim.getHands()--[guid] = handColor
   local function processSecret(cardData)
-    local oPos = cardData.obj.getPosition()
+    local _inHand = handObjs[cardData.guid]
+    if _inHand then
+      if _inHand ~= Elim.target then return end
+
+      _privateCount = _privateCount + 1
+      cardData.fromHand = true
+      table.insert(_cardsToReturn, cardData)
+      return
+    end
     --in play area
+    local oPos = cardData.obj.getPosition()
     if _boundingBoxContains(Elim.targetZone.boundingBox, oPos) then
-      _count = _count + 1
+      table.insert(_cardsToReturn, cardData)
       if cardData.obj.is_face_down then
         _privateCount = _privateCount + 1
       else
         table.insert(_publicLog, cardData.name)
       end
-      if safeDiscardFromHand({name = cardData.name, guid = cardData.guid, obj = cardData.obj, order = _count, shuffle = true}) == false then
-        table.insert(_errCards, cardData.guid)
-      else
-        Coru.yieldFor(8)()
-      end
-      coroutine.yield(0)
       return
     end
     --on mat
-    if SecretMat.contains(oPos, Elim.target) then
-      _count = _count + 1
-      if safeDiscardFromHand({name = cardData.name, guid = cardData.guid, obj = cardData.obj, order = _count, shuffle = true}) == false then
-        table.insert(_errCards, cardData.guid)
-      else
-        table.insert(_publicLog, cardData.name)
-        Coru.yieldFor(8)()
-      end
-      coroutine.yield(0) coroutine.yield(0)
+    if SecretMat.columnContains({guid = cardData.guid, color = Elim.target}) then
+      table.insert(_publicLog, cardData.name)
+      table.insert(_cardsToReturn, cardData)
       return
     end
   end
 
-  --else find secrets on mat and in play area
+  --find secrets
   for _,each in ipairs(Elim.secrets) do
     each.obj = each.obj ~= nil and each.obj or getObjectFromGUID(each.guid) --make sure obj ref is still good
     if each.obj ~= nil then
@@ -1114,113 +1110,20 @@ Elim.discardSecrets = function()
     end
   end
 
-  local totalCount = #_publicLog -1 + _privateCount
-  --delayed shuffle secret deck
-  --[[if totalCount > 1 then
-    Coru.wait(2, function()
-      local _sDeck = _deckHelper.getDeck("Secret Objectives")
-      if _sDeck then _sDeck.shuffle() end
-      safePrint("ALL", "Secret deck shuffled.", "Grey")
-    end)
-  end--]]
-  safePrint("ALL", "|   Found and discarded "..(totalCount).." cards:", "Yellow")
+  --discard
+  for i,each in ipairs(_cardsToReturn) do
+    each.shuffle = true
+    each.order = i
+    if safeDiscard(each) == false then table.insert(_errCards, each.guid) end
+    Coru.yieldFor(8)()
+  end
+
+  safePrint("ALL", "|   Discarded ".._privateCount.." unscored and "..(#_cardsToReturn - _privateCount).." scored/face-up secrets", "Yellow")
   if #_publicLog > 1 then safePrint("ALL", table.concat(_publicLog, " - "), "Yellow") end
-  if _privateCount > 0 then safePrint("ALL", "|   Found and discarded ".._privateCount.." unscored secrets", "Orange") end
   if #_errCards > 1 then
     safePrint("ALL", "!ERROR! "..(#_errCards).." failed to discard! Card GUIDS:", "Red")
     safePrint("ALL", table.concat(_errCards, " - "), "Red")
   end
-  if SecretMat.isInit and SecretMat.mat == nil then
-    safePrint("ALL","!WARNING! Could not find the 'Secrets Mat', some secrets may have been missed.", "Orange")
-  end
-end
-
---!_WARNING_! Rotating the Secret Mat will yield erronious results
---if columnColor is ommitted, will return true if obj is anywhere on the mat
-SecretMat.contains = function(objPosition, columnColor)
-  if not SecretMat.isInit then SecretMat.init() end
-  if SecretMat.mat == nil then
-    if SecretMat._updated then return false end
-    SecretMat.mat = SecretMat.guid and getObjectFromGUID(SecretMat.guid) or false
-    if not SecretMat.mat then SecretMat._updated = true return false end
-  end
-  if not SecretMat._updated then --refresh bounds positions
-    SecretMat._updated = true
-    Wait.frames(function() SecretMat._updated = false end, 5)
-    for eachCol,token in pairs(SecretMat.megaTokens) do
-      token.obj = token.obj ~= nil and token.obj or getObjectFromGUID(token.guid)
-      if token.obj == nil then SecretMat.megaTokens[eachCol] = nil end
-      token.pos = token.obj.getPosition()
-    end
-  end
-  if columnColor and not SecretMat.megaTokens[columnColor] then return false end
-
-  local _zBounds = { --Are we looking in a specific column, or looking for anywhere on the mat?
-    min = columnColor and SecretMat.megaTokens[columnColor].pos.z - SecretMat._tokenSize.z or SecretMat.bounds.min.z,
-    max = columnColor and SecretMat.megaTokens[columnColor].pos.z + SecretMat._tokenSize.z or SecretMat.bounds.max.z
-  }
-
-  return _boundingBoxContains({
-      min = {x = SecretMat.bounds.min.x, z = _zBounds.min},
-      max = {x = SecretMat.bounds.max.x, z = _zBounds.max}
-    }, objPosition)
-end
-
-SecretMat.init = function()
-  SecretMat.mat = nil
-  SecretMat.bounds = {}
-  SecretMat.megaTokens = {}
-  local _factions = _factionHelper.allFactions() or {}
-  local _tokenNames = {}--[name] = color
-  local _foundTokens = {}--[color] = {}
-  for color,eachFaction in pairs(_factions) do
-    _tokenNames[eachFaction.tokenName .. " Owner Token"] = color
-    _foundTokens[color] = {}
-  end
-  for _,eachObj in ipairs(getAllObjects()) do
-    local oName = eachObj.getName()
-    if oName == "Secrets Mat" then
-      SecretMat.mat = eachObj
-      SecretMat.guid = eachObj.getGUID()
-    elseif _tokenNames[oName] then
-      table.insert(_foundTokens[_tokenNames[oName]], eachObj)
-    end
-  end
-
-  if SecretMat.mat == nil then return end
-  local _matTransform = SecretMat.mat.getBoundsNormalized()
-  local _bounds = {min = {}, max = {}}
-  _bounds.min.x = _matTransform.center.x - _matTransform.size.x
-  _bounds.min.z = _matTransform.center.z - _matTransform.size.z
-  _bounds.max.x = _matTransform.center.x + _matTransform.size.x
-  _bounds.max.z = _matTransform.center.z + _matTransform.size.z
-  SecretMat.bounds = _bounds
-
-  local function _getColorMegaToken(color, tokenList)
-    for _,eachObj in ipairs(tokenList) do
-      local scl = eachObj.getScale()
-      if scl.x > 3 and _boundingBoxContains(SecretMat.bounds, eachObj.getPosition()) then
-        if not SecretMat._tokenSize then
-          local bndz = eachObj.getBoundsNormalized()
-          SecretMat._tokenSize = {x = bndz.size.x + 1, z = bndz.size.z + 1}
-        end
-        SecretMat.megaTokens[color] = {guid = eachObj.getGUID(), obj = eachObj}
-        return
-      end
-    end
-  end
-  for eachCol,tokens in pairs(_foundTokens) do
-    _getColorMegaToken(eachCol, tokens)
-  end
-  SecretMat.isInit = true
-end
-
-function onPlayerChangeColor(player_color)
-  SecretMat.isInit = false
-end
-
-function onFactionUnpacked(params)
-  SecretMat.isInit = false
 end
 
 --------------------------------------------------------------------------------
@@ -1300,9 +1203,6 @@ function safeDiscardFromHand(params)
     _deckHelper.discardCard({name = params.name, guid = params.guid, index = params.order, shuffleOnDiscard = params.shuffle})
   end
 
-  --Coru.wait(2, function() if params.obj ~= nil then params.obj.use_hands = true end end)
-
-  ---[[
   local _disCo = coroutine.create(function()
     params.obj.use_hands = false
     coroutine.yield(0)
@@ -1310,10 +1210,10 @@ function safeDiscardFromHand(params)
     local success, result = pcall(_discard)
     if not success then params.obj.use_hands = true return false end
 
-    Coru.yieldFor(5)
-    params.obj.use_hands = true
+    Coru.yieldFor(8)
+    if params.obj ~= nil then params.obj.use_hands = true end
   end)
-  Coru.run(_disCo)--]]
+  Coru.run(_disCo)
 end
 
 -------------------------------------------------------------------------------
