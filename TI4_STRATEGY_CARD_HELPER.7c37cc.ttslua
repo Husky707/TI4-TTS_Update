@@ -81,13 +81,14 @@ local _skipRepairs = {names = {}, guids = {}}
 
 --Public funcs------------------------------------------------------------------
 
-function returnStrategyCards(ignoreStability)
-
+function returnStrategyCards()
+  startLuaCoroutine(self, "_returnStrategyCards")
 end
 
---params: "CardName" or {name = "", ignoreStability = true}
+--params: "guid" or {guid = "", politicalStabilityColor = color}
 function returnStrategyCard(params)
-
+  local guid = assert(type(params) == "string" and params or params.guid)
+  _returnStrategyCard(guid, type(params) == "table" and params.politicalStabilityColor or nil)
 end
 
 --returns: STRATEGY_CARD_INITIATIVE {["cardName"] = #(initiative)} unless a filter is given
@@ -1042,44 +1043,60 @@ function _returnStrategyCards()
     end
     coroutine.yield(0)
 
-    local sheet = assert(_getStrategyCardSheet())
     local guidToColor = _zoneHelper.zonesFromPositions(guidToPosition)
     for _, guid in ipairs(foundGuids) do
+      local color = guidToColor[guid]
+      if color and color == politicalStabilityColor then
         local strategyCard = getObjectFromGUID(guid)
         local name = strategyCard.getName()
-        local color = guidToColor[guid]
-        if color and color == politicalStabilityColor then
-            broadcastToAll(color .. ' has Political Stability, not returning ' .. name .. ' strategy card', {0.1,0.5,0.1})
-        else
-            local index = assert(STRATEGY_CARD_INITIATIVE[name])
-            if #foundGuids > 8 and sheet.getStateId() ~= 2 then
-                index = index - 1
-            end
-            local snapPoint = sheet.call('getSnapPoint', index)
-            local position = sheet.positionToWorld(snapPoint.position)
-            local rotation = {
-                x = 0,
-                y = sheet.getRotation().y + snapPoint.rotation.y,
-                z = 0
-            }
-
-            local dx = strategyCard.getPosition().x - position.x
-            local dz = strategyCard.getPosition().z - position.z
-            local d = math.sqrt(dx ^ 2 + dz ^ 2)
-
-            if d > 1 then
-                local collide = false
-                local fast = true
-                local abovePos = { x = position.x, y = position.y + 1, z = position.z }
-                strategyCard.setLock(false)  -- paranoia
-                strategyCard.setPositionSmooth(abovePos, collide, fast)
-                strategyCard.setRotationSmooth(rotation, collide, fast)
-            end
-        end
-        coroutine.yield(0)
+        broadcastToAll(color .. ' has Political Stability, not returning ' .. name .. ' strategy card', {0.1,0.5,0.1})
+      else
+        _returnStrategyCard(guid)
+      end
+      coroutine.yield(0)
     end
 
     broadcastToAll('Returned Strategy Cards.')
+end
+
+function _returnStrategyCard(guid, politicalStabilityHolder)
+  local strategyCard = getObjectFromGUID(guid)
+  local name = strategyCard.getName()
+
+  if politicalStabilityHolder then
+    local color = _zoneHelper.zoneFromPosition(strategyCard.getPosition())
+    if color and color == politicalStabilityHolder then
+      broadcastToAll(color .. ' has Political Stability, not returning ' .. name .. ' strategy card', {0.1,0.5,0.1})
+      return
+    end
+  end
+  --else
+
+  local sheet = assert(_getStrategyCardSheet())
+  local index = assert(STRATEGY_CARD_INITIATIVE[name])
+  --[[if #foundGuids > 8 and sheet.getStateId() ~= 2 then
+      index = index - 1
+  end--]]
+  local snapPoint = sheet.call('getSnapPoint', index)
+  local position = sheet.positionToWorld(snapPoint.position)
+  local rotation = {
+      x = 0,
+      y = sheet.getRotation().y + snapPoint.rotation.y,
+      z = 0
+  }
+
+  local dx = strategyCard.getPosition().x - position.x
+  local dz = strategyCard.getPosition().z - position.z
+  local d = math.sqrt(dx ^ 2 + dz ^ 2)
+
+  if d > 1 then
+      local collide = false
+      local fast = true
+      local abovePos = { x = position.x, y = position.y + 1, z = position.z }
+      strategyCard.setLock(false)  -- paranoia
+      strategyCard.setPositionSmooth(abovePos, collide, fast)
+      strategyCard.setRotationSmooth(rotation, collide, fast)
+  end
 end
 
 -------------------------------------------------------------------------------

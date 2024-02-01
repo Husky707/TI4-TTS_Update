@@ -35,7 +35,27 @@ local _snapPointsGrid = false
 local _scriptingZone = false
 
 local _attachedGuidToName = {}
-local _laws = {}
+local _laws = {}--{[name] = true}
+
+--Public getters--------------------------------------------------------------
+
+--returns: {[name] = guid}
+function getLaws()
+  local _format = {}
+  for guid,name in pairs(_attachedGuidToName) do
+    _format[name] = guid
+  end
+  return _format
+end
+
+--returns guid of law card if in play
+function isLawOnMat(lawName)
+  for guid,name in ipairs(_attachedGuidToName) do
+    if lawName == name then return guid end
+  end
+
+  return false
+end
 
 -------------------------------------------------------------------------------
 

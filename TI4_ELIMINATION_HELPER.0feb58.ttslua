@@ -14,6 +14,7 @@ local _systemHelper = getHelperClient('TI4_SYSTEM_HELPER')
 local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
 local Events = getHelperClient('TI4_EVENT_HELPER')
 local SecretMat = getHelperClient('Secrets Mat')
+local AgendaMat = getHelperClient('Agendas/Laws Mat')
 
 local Coru = {
  _coroutines = {},
@@ -418,6 +419,7 @@ Elim.Resolve = function(elimPlayer)
   Elim.colors = _zoneHelper.zones()
   Elim.factions = _factionHelper.allFactions() or {}
   Elim.commandTokens = {}
+  Elim.controlTokens = {}--{{guid, obj},...}--elim player's only
   Elim.units = {}
   Elim.proms = {}
   Elim.strats = {}
@@ -427,7 +429,6 @@ Elim.Resolve = function(elimPlayer)
   Elim.secrets = {}
   Elim.secretsMat = {}
   Elim.agendas = {}
-  Elim.agendasMat = {}
 
   _elimInProgress = Elim.target
 
@@ -463,7 +464,7 @@ Elim.Resolve = function(elimPlayer)
             for _,each in ipairs(data.ignore.ME.guids or {}) do
               _factionInstructions.guids[each] = false
             end
-            local gets = data.ignore.ME.GET and tryCall(data.ignore.ME.GET) or {}
+            local gets = data.ignore.ME.GET and tryCall(data.ignore.ME.GET, {color = Elim.target}) or {}
             if type(gets) == "table" then
               for _,each in ipairs(gets) do
                 _factionInstructions.names[each] = false
@@ -480,7 +481,7 @@ Elim.Resolve = function(elimPlayer)
           for _,each in ipairs(data.ignore.OTHERS.guids or {}) do
             _factionInstructions.guids[each] = false
           end
-          local gets = data.ignore.OTHERS.GET and tryCall(data.ignore.OTHERS.GET) or {}
+          local gets = data.ignore.OTHERS.GET and tryCall(data.ignore.OTHERS.GET, {color = Elim.target}) or {}
           if type(gets) == "table" then
             for _,each in ipairs(gets) do
               _factionInstructions.names[each] = false
@@ -532,7 +533,7 @@ Elim.Resolve = function(elimPlayer)
     end
   end
 
-  local containers = {["Agendas/Laws Mat"] = "Agendas"}
+  local containers = {["x3 Fighter Tokens Bag"] = "x3Fighters", ["x1 Fighter Tokens Bag"] = "x1Fighters", [("Directionaliser ("..Elim.target..")")] = "Directionaliser"}
   local units = {}
   local proms = {}
   --build objectName sets that include a player color: [name] = color
@@ -562,11 +563,14 @@ Elim.Resolve = function(elimPlayer)
     end
   end
 
+  --local controlTokens = false --was going to find agendas on the mat that only have elim player's controlTokens, but decided against it
   local commandTokens = {[Elim.target.." Command Token"] = true}
   containers[Elim.target.." Command Tokens Bag"] = "commandTokens"
   if Elim.factions[Elim.target] then
     commandTokens[Elim.factions[Elim.target].tokenName .. " Command Token"] = true
     containers[Elim.factions[Elim.target].tokenName .. " Command Tokens Bag"] = "commandTokens"
+    --controlTokens[Elim.factions[Elim.target].tokenName .. " Owner Token"] = true
+    --containers[Elim.factions[Elim.target].tokenName .. " Owner Tokens Bag"] = "controlTokens"
   end
   local strats = _stratHelper.getStrategyCards()
   for _,each in pairs(strats or {}) do each = true end --cast to boolean
@@ -576,7 +580,11 @@ Elim.Resolve = function(elimPlayer)
   for k,v in ipairs(_sList) do
     secrets[v] = true
   end
-  local agendas = _deckHelper.getCardsWithSource({deckName = "Agenda"}) or {}
+  local _aList = _deckHelper.getCardsWithSource({deckName = "Agenda"}) or {}
+  local agendas = {}
+  for k,v in ipairs(_aList) do
+    agendas[v] = true
+  end
 
   --Step 2. Search the table for objects of interest and save the objReference
     --Generally saved in a list as,{name = "", guid = "", obj = objRef, color = colorOwner}
@@ -596,6 +604,9 @@ Elim.Resolve = function(elimPlayer)
     elseif commandTokens[name] then --Elim.commandTokens[guid] = obj return
       table.insert(Elim.commandTokens, {name = name, guid = guid, obj = obj})
       return
+    --[[elseif controlTokens == name then --decided not to track agenda ownership bassed soley on if it has a control token on it.
+      table.insert(Elim.controlTokens, {name = name, guid = guid, obj = obj})
+      return--]]
     elseif strats[name] then
       local isInZone = _zoneHelper.zoneFromPosition(obj.getPosition())
       if isInZone == Elim.target then table.insert(Elim.strats, {name = name, guid = guid, obj = obj}) end--Elim.strats[guid] = obj end
@@ -642,37 +653,51 @@ Elim.Resolve = function(elimPlayer)
       end
     end
 
-    Elim.returnCommandTokens()
+    local success, err = pcall(Elim.returnUnits)
+    if not success then print(err) end
     coroutine.yield(0)
 
-    Elim.returnUnits()
+    success, err = pcall(Elim.returnCommandTokens)
+    if not success then print(err) end
     coroutine.yield(0)
 
     --Move Speaker token left
-    Elim.shiftSpeaker()
+    success, err = pcall(Elim.shiftSpeaker)
+    if not success then print(err) end
     coroutine.yield(0)
 
-    Elim.returnProms()
+    success, err = pcall(Elim.returnProms)
+    if not success then print(err) end
     coroutine.yield(0)
 
     --Others reclaim their own proms from elim'd player
-    Elim.reclaimProms()
+    success, err = pcall(Elim.reclaimProms)
+    if not success then print(err) end
     coroutine.yield(0)
 
-    Elim.returnStrats()
+    success, err = pcall(Elim.returnStrats)
+    if not success then print(err) end
     coroutine.yield(0)
 
     --Return secrets (even scored ones)
-    Elim.discardSecrets()
+    success, err = pcall(Elim.discardSecrets)
+    if not success then print(err) end
     coroutine.yield(0)
 
     --Discard agendas
+    success, err = pcall(Elim.discardAgendas)
+    if not success then print(err) end
+    coroutine.yield(0)
 
     --Discard action cards
-    Elim.discardActions()
+    success, err = pcall(Elim.discardActions)
+    if not success then print(err) end
     coroutine.yield(0)
 
     --Handle faction specific MISC items
+    success, err = pcall(Elim.returnMisc)
+    if not success then print(err) end
+    coroutine.yield(0)
 
     Events.invokeAsync({event = "resolvePlayerEliminated", params = {color = Elim.target}})
     coroutine.yield(0)
@@ -684,7 +709,7 @@ Elim.Resolve = function(elimPlayer)
   Coru.run(coru)
 end
 
---return elim player's proms
+--returns elim player's proms
 Elim.returnProms = function()
   safePrint("ALL", "|\n|~Returning Promissory Notes...", "Yellow")
   coroutine.yield(0)
@@ -770,14 +795,18 @@ Elim.returnProms = function()
   --move to play area
   for _,eachNote in ipairs(_notesToReturn) do
     eachNote.deal(1, Elim.target)
-    coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
+    Coru.yieldFor(8)
   end
 
   --printResult
-  safePrint("ALL", "|   Found and returned "..#_notesToReturn.." notes:", "Yellow")
-  for eachCol,found in pairs(_printNotes) do
-    if #found > 1 then
-      safePrint("ALL", table.concat(found, " - "), eachCol)
+  if #_notesToReturn < 1 then
+    safePrint("ALL", "|   No notes found", "Yellow")
+  else
+    safePrint("ALL", "|   Found and returned "..#_notesToReturn.." notes:", "Yellow")
+    for eachCol,found in pairs(_printNotes) do
+      if #found > 1 then
+        safePrint("ALL", table.concat(found, " - "), eachCol)
+      end
     end
   end
 end
@@ -828,10 +857,14 @@ Elim.reclaimProms = function()
   end
 
   --printResult
-  safePrint("ALL", "|   Found and returned "..#_notesToReturn.." notes", "Yellow")
-  for eachCol,noteNames in pairs(_printNotes) do
-    if #noteNames > 1 then --all colors have a prefix at i == i, ignore this
-      safePrint("ALL", table.concat(noteNames, " - "), eachCol)
+  if #_notesToReturn < 1 then
+    safePrint("ALL", "|   No notes found", "Yellow")
+  else
+    safePrint("ALL", "|   Found and returned "..#_notesToReturn.." notes", "Yellow")
+    for eachCol,noteNames in pairs(_printNotes) do
+      if #noteNames > 1 then --all colors have a prefix at i == i, ignore this
+        safePrint("ALL", table.concat(noteNames, " - "), eachCol)
+      end
     end
   end
 end
@@ -907,26 +940,29 @@ Elim.returnCommandTokens = function()
       coroutine.yield(0)
       coroutine.yield(0)
     end
-    safePrint("ALL", "|   Success: Returned ".._count.." tokens.","Yellow")
+
+    if _count < 1 then
+      safePrint("ALL", "|   No tokens found", "Yellow")
+    else
+      safePrint("ALL", "|   Found and returned ".._count.." tokens.","Yellow")
+    end
 end
 
---!toDo Find fighter stacks
 Elim.returnUnits = function()
   if not Elim.units or not next(Elim.units) then
     safePrint("ALL", "|!FAILED! Did not locate any units.", "RED")
     return
   end
 
-  --!todo Get fighter stacks
   --return elim player's units and any units they have captured
   safePrint("ALL", "|\n|~Returning units...", "Yellow")
-  local targetUnits = {}--{{n,obj,col,guid},}
-  local othersUnits = {}--{{n,obj,col,guid},}
+  local targetUnits = {}--{{name,obj,col,guid},}
+  local othersUnits = {}--{{name,obj,col,guid},}
   local unitBags = {}--[color][unitType] = objRef
   local _missingBags = {}
   for _,each in ipairs(Elim.colors) do unitBags[each] = {} _missingBags[each] = {} end--init
-  --separate unit objs by owner. separate unit bags from unit pieces
-  --other players' units are returned if thay are captured in the elim player's zone
+  --separate unitObjs by owner. separate unit bags from unit pieces
+  --other players' units are returned if they are captured in the elim player's zone
   for _,eachUnit in ipairs(Elim.units) do
     eachUnit.obj = eachUnit.obj ~= nil and eachUnit.obj or getObjectFromGUID(eachUnit.guid)
     local liveRef = eachUnit.obj
@@ -939,16 +975,82 @@ Elim.returnUnits = function()
       end
     end
   end
+
+  --get fighter tokens
+  local _fighterData = {
+    name = (Elim.target.." Fighter"),
+    size = false,--objBounds set by first fighter found, used for sphereCast size
+    x3s = {},--found tokens {[guid] = obj,...}
+    x1s = {}
+  }
+  if Elim.containers["x3Fighters"] ~= nil or Elim.containers["x1Fighters"] ~= nil then
+    for _,eachUnit in ipairs(targetUnits) do
+      if eachUnit.name == _fighterData.name then
+        if not _fighterData.size then
+          _fighterData.size = eachUnit.obj.getBounds().size
+        end
+        --build circleCast
+        local _oPos = eachUnit.obj.getPosition()
+        local _castStart = _oPos.y +(1.501 * _fighterData.size.y)--starting above the fighter, then moving down
+        local _cast = Physics.cast({
+            type = 2,
+            origin = {x = _oPos.x, y = _castStart, z = _oPos.z},
+            direction = {0, -1, 0},
+            max_distance = _castStart - 1.13,--till systemTile hit
+            size = {x = _fighterData.size.z, y = _fighterData.size.z, z = _fighterData.size.z},
+            --debug = true
+        })
+        --find tokens in result:
+        for _,eachHit in ipairs(_cast or {}) do
+          local _oName = eachHit.hit_object.getName()
+          if _oName == "x3 Fighter Token" then
+            local oG = eachHit.hit_object.getGUID()
+            _fighterData.x3s[oG] = eachHit.hit_object
+          elseif _oName == "x1 Fighter Token" then
+            local oG = eachHit.hit_object.getGUID()
+            _fighterData.x1s[oG] = eachHit.hit_object
+          end
+        end
+        Coru.yieldFor(4)
+      end
+    end
+  end
+
+  --return elim player's units
   for _,eachUnit in ipairs(targetUnits) do
     if unitBags[Elim.target][eachUnit.name] then
       unitBags[Elim.target][eachUnit.name].putObject(eachUnit.obj)
-      coroutine.yield(0)
-      coroutine.yield(0)
+      Coru.yieldFor(4)
     else
       _missingBags[Elim.target][eachUnit.name] = true
     end
   end
   coroutine.yield(0)
+
+  --return any of their fighter tokens
+  if Elim.containers["x3Fighters"] ~= nil then
+    for tokenGuid,eachToken in pairs(_fighterData.x3s) do
+      eachToken = eachToken ~= nil and eachToken or getObjectFromGUID(tokenGuid) --is ref still good?
+      if eachToken ~= nil then
+        Elim.containers["x3Fighters"].putObject(eachToken)
+        coroutine.yield(0) coroutine.yield(0)
+      end
+    end
+  else
+    safePrint("!ERROR! Could not find 'x3 Fighter Tokens Bag'", "Red")
+  end
+  if Elim.containers["x1Fighters"] ~= nil then
+    for tokenGuid,eachToken in pairs(_fighterData.x1s) do
+      eachToken = eachToken ~= nil and eachToken or getObjectFromGUID(tokenGuid) --is ref still good?
+      if eachToken ~= nil then
+        Elim.containers["x1Fighters"].putObject(eachToken)
+        coroutine.yield(0) coroutine.yield(0)
+      end
+    end
+  else
+    safePrint("!ERROR! Could not find 'x1 Fighter Tokens Bag'", "Red")
+  end
+
   --report failures
   if next(_missingBags[Elim.target] or {}) then
     local pTable = {"! Failed to find unit bags for:"}
@@ -958,6 +1060,7 @@ Elim.returnUnits = function()
     safePrint("ALL", table.concat(pTable, ", "), "Red")
   end
   coroutine.yield(0)
+
   --find captued units
   _missingBags[Elim.target] = nil
   local _isMissingBags = false
@@ -1010,15 +1113,15 @@ Elim.returnStrats = function()
 
   safePrint("ALL", "|\n|~Returning Strategy Card(s)...", "Yellow")
   coroutine.yield(0)
-  local _printStrats = {"|  Returned"}
+  local _printStrats = {"|    Returned"}
   for _,eachStrat in ipairs(Elim.strats) do
     table.insert(_printStrats, eachStrat.name)
-    _stratHelper.returnStrategyCard({name = eachStrat.name, ignoreStability = true})
+    _stratHelper.returnStrategyCard(eachStrat.guid)
     coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) coroutine.yield(0)
   end
   --print result
   if #_printStrats > 1 then safePrint("ALL", table.concat(_printStrats, " - "), "Yellow")
-  else safePrint("ALL", "|  None found", "Yellow") end
+  else safePrint("ALL", "|    None found", "Yellow") end
   coroutine.yield(0)
 end
 
@@ -1038,12 +1141,17 @@ Elim.discardActions = function()
         if safeDiscardFromHand({name = oName, guid = each, obj = obj, order = _count}) == false then
           table.insert(_errCards, oName) else table.insert(_logCards, oName)
         end
-        Coru.yieldFor(4)()
+        Coru.yieldFor(6)
       end
     end
   end
-  safePrint("ALL", "|   Found and discarded "..(#_logCards -1).." cards:", "Yellow")
-  safePrint("ALL", table.concat(_logCards, " - "), "Yellow")
+
+  if #_logCards - 1 < 1 then
+    safePrint("ALL", "|   No action cards found", "Yellow")
+  else
+    safePrint("ALL", "|   Found and discarded "..(#_logCards -1).." cards:", "Yellow")
+    safePrint("ALL", table.concat(_logCards, " - "), "Yellow")
+  end
   if #_errCards > 1 then
     safePrint("ALL", "!ERROR! "..(#_errCards).." failed to discard:", "Red")
     safePrint("ALL", table.concat(_errCards, " - "), "Red")
@@ -1057,20 +1165,6 @@ Elim.discardSecrets = function()
   local _errCards = {"| "}
   local _cardsToReturn = {}
   local _privateCount = 0
-
-  --[[Discard secretly from hand
-  for each,color in pairs(handObjs or {}) do
-    if color == Elim.target then
-      local obj = getObjectFromGUID(each)
-      local oName = obj ~= nil and obj.getName()
-      if obj ~= nil and _deckHelper.getDeckName(oName) == "Secret Objectives" then
-        _count = _count + 1
-        --if safeDiscardFromHand(oName, each) then _privateCount = _privateCount + 1 else table.insert(_errCards, each) end
-        if safeDiscardFromHand({name = oName, guid = each, obj = obj, order = _count, shuffle = true}) == false then table.insert(_errCards, each) else _privateCount = _privateCount + 1 end
-        Coru.yieldFor(8)()
-      end
-    end
-  end--]]
 
   local handObjs = Elim.getHands()--[guid] = handColor
   local function processSecret(cardData)
@@ -1115,14 +1209,109 @@ Elim.discardSecrets = function()
     each.shuffle = true
     each.order = i
     if safeDiscard(each) == false then table.insert(_errCards, each.guid) end
-    Coru.yieldFor(8)()
+    Coru.yieldFor(8)
   end
 
-  safePrint("ALL", "|   Discarded ".._privateCount.." unscored and "..(#_cardsToReturn - _privateCount).." scored/face-up secrets", "Yellow")
-  if #_publicLog > 1 then safePrint("ALL", table.concat(_publicLog, " - "), "Yellow") end
+  if #_cardsToReturn < 1 then
+    safePrint("ALL", "|   No secrets found", "Yellow")
+  else
+    safePrint("ALL", "|   Discarded ".._privateCount.." unscored and "..(#_cardsToReturn - _privateCount).." scored/face-up secrets", "Yellow")
+    if #_publicLog > 1 then safePrint("ALL", table.concat(_publicLog, " - "), "Yellow") end
+  end
   if #_errCards > 1 then
     safePrint("ALL", "!ERROR! "..(#_errCards).." failed to discard! Card GUIDS:", "Red")
     safePrint("ALL", table.concat(_errCards, " - "), "Red")
+  end
+end
+
+Elim.discardAgendas = function()
+  safePrint("ALL", "|\n|~Discarding agendas from play area...", "Yellow")
+  coroutine.yield(0)
+
+  if not next(Elim.agendas) then
+    safePrint("ALL", "|   Found no laws in play", "Yellow") return
+  end
+  local _log = {"|\n|   Discarded"}
+
+  --get laws from mat
+  local _getMatLaws = copyTable(AgendaMat.getLaws() or {})
+  local _matLaws = {}
+  for name,eachGuid in pairs(_getMatLaws) do
+    _matLaws[name] = {guid = eachGuid, obj = getObjectFromGUID(eachGuid), name = name}
+  end
+
+  --expect laws to be copy/pasted
+  --get laws in play area, find any copies of it on the mat
+  local _ownedAgendas = {}
+  for _,eachAgenda in ipairs(Elim.agendas) do
+    eachAgenda.obj = eachAgenda.obj ~= nil and eachAgenda.obj or getObjectFromGUID(eachAgenda.guid)
+    if eachAgenda.obj ~= nil then
+      local oPos = eachAgenda.obj.getPosition()
+      if _boundingBoxContains(Elim.targetZone.boundingBox, oPos) then
+        table.insert(_ownedAgendas, eachAgenda)
+        table.insert(_log, eachAgenda.name)
+      end
+    end
+  end
+
+  --find any coppies on mat
+  for _,eachOwned in ipairs(_ownedAgendas) do
+    if _matLaws[eachOwned.name] then
+      table.insert(_ownedAgendas, _matLaws[eachOwned.name])
+      _matLaws[eachOwned.name] = nil --trim the table
+    end
+  end
+
+  --return cards
+  local _errs = {"!ERROR! Failed to discard"}
+  for i,eachOwned in ipairs(_ownedAgendas) do
+    eachOwned.order = i
+    if safeDiscard(eachOwned) == false then table.insert(_errs, eachOwned.name) end
+    Coru.yieldFor(8)
+  end
+
+  if #_log > 1 then
+    _log[1] = ("|\n|   Discarded "..#_ownedAgendas.." agendas\n|  ")
+    safePrint("ALL", table.concat(_log, " - "), "Yellow")
+  else
+    safePrint("ALL", "|   No agendas in play area - players should check the Agenda Mat", "Yellow")
+  end
+  if #_errs > 1 then
+    safePrint("ALL", table.concat(_errs, " - "), "Red")
+  end
+end
+
+Elim.returnMisc = function()
+  if not next(Elim.misc) then return end
+  safePrint("ALL", "|\n|~Returning faction specific items...", "Yellow")
+  coroutine.yield(0)
+
+  if Elim.containers["Directionaliser"] == nil then return end
+  local _refPos = Elim.containers["Directionaliser"].getPosition()
+  if not _refPos then return end
+  local _tableSide = _refPos.z > 0 and -1 or 1
+
+  local _returnTo = {x = _refPos.x - 10, y = _refPos.y, z = _refPos.z + (3* _tableSide)}
+  local _objsToReturn = {}
+  local _log = {"|"}
+  for i,each in ipairs(Elim.misc) do
+    each.obj = each.obj ~= nil and each.obj or getObjectFromGUID(each.guid)
+    if each.obj ~= nil and not _boundingBoxContains(Elim.targetZone.boundingBox, each.obj.getPosition()) then
+      table.insert(_log, each.name)
+      table.insert(_objsToReturn, each.obj)
+    end
+  end
+
+  for i,eachObj in ipairs(_objsToReturn) do
+    eachObj.setPositionSmooth({x = _returnTo.x + (i*0.5), y = _returnTo.y, z = _returnTo.z}, false, true)
+    Coru.yieldFor(6)
+  end
+
+  if #_log > 1 then
+    _log[1] = ("|    Found and returned "..#_log.." items:\n")
+    safePrint("ALL", table.concat(_log, " - "), "Yellow")
+  else
+    safePrint("ALL", "|   No unique items found", "Yellow")
   end
 end
 
@@ -1294,11 +1483,8 @@ Coru.wait = function(t, callback)
 end
 
 Coru.yieldFor = function(frames)
-  local function _newYeild()
-    local _frames = 0
-    while _frames < frames do _frames = _frames + 1 coroutine.yield(0) end
-  end
-  return _newYeild
+  local _frames = 0
+  while _frames < frames do _frames = _frames + 1 coroutine.yield(0) end
 end
 -------------------------------------------------------------------------------
 function copyTable(t)
