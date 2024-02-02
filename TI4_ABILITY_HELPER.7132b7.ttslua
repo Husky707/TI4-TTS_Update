@@ -26,7 +26,7 @@ local _toggleUpdate = false
 
 -- abilities are what enable players to use gameEffects. Abilities are used within a CONTEXT
 local CONTEXT = { --converted to table indexed by value during load: ["context"] = true
-  "Frontier Exploration", "Planet Exploration", "commodities", "adjacency", "draw_actionCard", "draw_..."
+  "Frontier Exploration", "Planet Exploration", "Commodities", "Draw Action Cards", "Draw Action Cards(Status Phase)"
 }
 CONTEXT = _hash(CONTEXT)
 local _gameEffects = {
@@ -61,6 +61,8 @@ end
 --[[return: = { --single {table} or, if getting all colors, a table with {[color] = {return}} keys for each [color]
   ["_effectID"] = {
     count = #,--how many times should this effect be applied
+    apply = {guid, func},--the apply adress for this effect
+    description = effect.descrition, --string or nil
     sources = { --groups the individual sources found by source id
       [sourceID] = {
         count,
@@ -87,6 +89,22 @@ function isToggleActiveCardActive(params)
   assert(params ~= nil)
   local obj = assert(type(params) == "userdata" and params or params.obj or false)
   return _isToggleActiveCard(obj) and _isToggleActiveCardActive(obj)
+end
+
+--[[Helper used to print out applied effects to the chat box
+  --prints: effect..all active sources of that effect
+params: {
+  sources = {[sourceID]}, --the source list for an effect returned from a getActiveAbilities() call
+  log = {}, --your current log, each sourceID will be inserted then the log table will be returned
+}--]]
+function logSources(params)
+  params = type(params) == "table" and params or {params}
+  local log = copyTable(params.log or {})
+  for eachSourceID,_ in pairs(params.sources or {}) do
+    table.insert(log, eachSourceID)
+  end
+
+  return copyTable(log) --all copying is done on this script, so the caller should be free to put/get their table directly to/from function
 end
 
 --Injection---------------------------------------------------------------------
@@ -185,13 +203,20 @@ function registerAbility(newEffect)
     end
   end
 
+  local function validateGET(getter)
+    assert(type(getter) == "table" and getter.func and type(getter.func) == "string")
+    getter.guid = assert(getter.guid or getter.obj ~= nil and type(getter.obj) == "userdata" and getter.obj.getGUID())
+    return getter
+  end
+
   if _gameEffects[newEffect.id] then pcall(printToAll("WARNING: Overriding gameEffect >"..newEffect.id.."<", "Yellow")) end
   _gameEffects[newEffect.id] = {
     id = newEffect.id,
     description = newEffect.description,
     stackable = newEffect.stackable,
     _hasContext = contexts,
-    sources = validSources
+    sources = validSources,
+    apply = newEffect.apply and validateGET(newEffect.apply) or nil
   }
   if not _silentInjection then _reportInjection(newEffect.id) end
 end
@@ -656,6 +681,8 @@ function _getEffectTargets(context, effect)
 
   --get final counts in result table and insert result into context
   for eachColor, effectResult in pairs(_result) do
+    effectResult.apply = effect.apply or {guid = self.getGUID(), obj = self, func = "_nilApply"}
+    effectResult.description = effect.description
     effectResult.count = not effect.stackable and 1 or 0
     if effect.stackable then
       for _,eachSource in pairs(effectResult.sources) do
@@ -710,6 +737,9 @@ function getNativeFaction(forAbility, category)
       if eachVal == forAbility then return eachFaction.color, eachFaction.shortName or eachFaction.frankenName end
     end
   end
+end
+
+function _nilApply()
 end
 
 -------------------------------------------------------------------------------

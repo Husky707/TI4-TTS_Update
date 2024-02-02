@@ -132,6 +132,11 @@ end
 
 ---Injection--------------------------------------------------------------------
 
+--See TI4_ABILITY_HELPER for table format
+function injectActionCardAblity(abilityData)
+  registerAbility(abilityData)
+end
+
 --These cards will NEVER be readied during the status phase(not undo-able)
 function injectDoNotReady(cardName)
     assert(type(cardName) == 'string')
@@ -191,13 +196,28 @@ function _restrictToSeated(order)
 end
 
 function _safeBroadcastToColor(message, playerColor, messageColor)
-    for _, player in ipairs(Player.getPlayers()) do
-        if player.color == playerColor then
-            broadcastToColor(message, playerColor, messageColor)
-            return
-        end
-    end
-    broadcastToAll(message, messageColor)
+  local player = Player[playerColor]
+  if not player or not player.seated then return end
+  broadcastToColor(message, playerColor, messageColor)
+end
+
+--TTS throws errors when it tries to broadcast or print to an unseated player
+function _safeBroadcastToAll(message, messageColor)
+  for _, player in ipairs(Player.getPlayers()) do
+    _safeBroadcastToColor(message, player.color, messageColor)
+  end
+end
+
+function _safePrintToColor(message, playerColor, messageColor)
+  local player = Player[playerColor]
+  if not player or not player.seated then return end
+  printToColor(message, playerColor, messageColor)
+end
+
+function _safePrintToAll(messsage, messageColor)
+  for _, player in ipairs(Player.getPlayers()) do
+    _safePrintToColor(message, player.color, messageColor)
+  end
 end
 
 function _getStrategyCardSheet()
@@ -292,7 +312,7 @@ function _onClickPlay(strategyCard, parameters, playerColor)
         UI.setAttribute(parameters.ui, "visibility", table.concat(seated, "|"))
         UI.setAttribute(parameters.ui, "active", true)
         -- Tell the card in case there is any custom handling there.
-        broadcastToAll('Activating ' .. strategyCard.getName(), playerColor)
+        _safeBroadcastToAll('Activating ' .. strategyCard.getName(), playerColor)
         strategyCard.call(parameters.onPlayCallback, playerColor)
     end
 
@@ -365,195 +385,185 @@ local _actionCardAbilities = {
     stackable = true,
     sources = {
       { id = "Neural Motivator",
-        context = "Status Phase Draw Action Cards",
+        context = "Draw Action Cards(Status Phase)",
         refs = {OBJECTS = "Neural Motivator"},
         stackable = false,
         targetType = "OWNER"
       },
       { id = 'Scheming',
-        context = {"Draw Action Cards", "Status Phase Draw Action Cards"},
+        context = {"Draw Action Cards", "Draw Action Cards(Status Phase)"},
         refs = {FACTION_ABILITIES = 'Scheming'},
         stackable = false,
         targetType = "OWNER"
       }
-    }
+    },
+    apply = {guid = self.getGUID(), func = "_applyDrawAdditionalAction", obj = self}
   }
 }
 
 function dealAllActionCards(dealOrder)
-    --local _activeDrawAbilities = _abilityHelper.getActiveAbilities({context = {"Draw Action Cards", "Status Phase Draw Action Cards"}})
-    local eliminatedPlayerSet = {}--_eliminationHelper.getEliminatedPlayers()
+    local eliminatedPlayerSet = _eliminationHelper.getEliminatedPlayers() or {}
 
-    local function processColor(color)
-        local faction = _factionHelper.fromColor(color)
-        if not faction then
-            broadcastToAll('Deal action cards: no faction for ' .. color, 'Red')
-            return
-        end
-
-        if eliminatedPlayerSet[color] then
-            broadcastToAll('Deal action cards: ' .. color .. ' eliminated, skipping')
-            return
-        end
-
-        --[[local abilitiesSet = {}
-        for _, ability in ipairs(faction.abilities) do
-            abilitiesSet[ability] = true
-        end
-        for guid, color2 in pairs(guidToColor) do
-            if color == color2 then
-                abilitiesSet[guidToName[guid = true
-            end
-        end
-
-        local count = 1
-        if abilitiesSet['Neural Motivator'] then
-            count = count + 1
-            _safeBroadcastToColor('Neural Motivator active.', color, {0.1,0.5,0.1})
-        end
-        if abilitiesSet['Scheming'] then
-            count = count + 1
-            _safeBroadcastToColor('Scheming.', color, {0.1,0.5,0.1})
-        end
-        --]]
-
-        -- Deal.
-        _deckHelper.deal({
-            deck = 'Actions',
-            count = 1,--count,
-            color = color
-        })
-    end
-    print("Test order: ", table.concat(getInitiativeOrder().order, ", "))
+    --print("Test order: ", table.concat(getInitiativeOrder().order, ", "))
     dealOrder = dealOrder or Turns.enable and Turns.order or getInitiativeOrder().order
     dealOrder = _uniqueList(dealOrder)
     dealOrder = _restrictToSeated(dealOrder)
 
-    for _, color in ipairs(dealOrder) do
-        processColor(color)
-    end
-    broadcastToAll('Dealt Action Cards.')
-end
-
-function _dealAllActionCards(dealOrder)
-    local lookForSet = {
-        ['Neural Motivator'] = true,
-    }
-
-    local guidToPosition = {}
-    local guidToName = {}
-    local eliminatedPlayerSet = {}
-
-    local inHandGuidSet = _zoneHelper.inHand()
-    for _, object in ipairs(getAllObjects()) do
-        local name = object.getName()
-        local guid = object.getGUID()
-        if lookForSet[name] and (not inHandGuidSet[guid]) and (not object.is_face_down) then
-            guidToPosition[guid] = object.getPosition()
-            guidToName[guid] = name
-        end
-        if name == 'Player Eliminated' then
-            local color = _zoneHelper.zoneFromPosition(object.getPosition())
-            if color then
-                eliminatedPlayerSet[color] = true
-            end
-        end
-    end
-
-    local guidToColor = _zoneHelper.zonesFromPositions(guidToPosition)
-
     local function processColor(color)
         local faction = _factionHelper.fromColor(color)
         if not faction then
-            broadcastToAll('Deal action cards: no faction for ' .. color, 'Red')
+            _safeBroadcastToAll('Deal action cards: no faction for ' .. color, 'Red')
             return
         end
 
         if eliminatedPlayerSet[color] then
-            broadcastToAll('Deal action cards: ' .. color .. ' eliminated, skipping')
+            _safeBroadcastToAll('Deal action cards: ' .. color .. ' eliminated, skipping', "Red")
             return
         end
 
-        local abilitiesSet = {}
-        for _, ability in ipairs(faction.abilities) do
-            abilitiesSet[ability] = true
-        end
-        for guid, color2 in pairs(guidToColor) do
-            if color == color2 then
-                abilitiesSet[guidToName[guid]] = true
-            end
+        local _player = Player[color]
+        if not _player or not _player.seated then
+          _safeBroadcastToAll('Deal action cards: '..color.. ' is not seated - skipping', "Red")
+          return
         end
 
-        local count = 1
-        if abilitiesSet['Neural Motivator'] then
-            count = count + 1
-            _safeBroadcastToColor('Neural Motivator active.', color, {0.1,0.5,0.1})
-        end
-        if abilitiesSet['Scheming'] then
-            count = count + 1
-            _safeBroadcastToColor('Scheming.', color, {0.1,0.5,0.1})
+        local abilitiesSet = _abilityHelper.getActiveAbilities({color = color, context = "Draw Action Cards(Status Phase)"}) or {}
+        local _drawData = {
+          color = color,
+          count = 1,
+          abilities = abilitiesSet
+        }
+
+        local _abilityLog = {"Active abilites"}
+        for eachAbility, data in pairs(abilitiesSet) do
+          local _callParams = copyTable(_drawData)
+          _callParams.applyCount = data.count
+          local result = tryCall(data.apply, _callParams)
+          if result and type(result) == "table" then   print(table.concat(result, " - ")) else print("Result: ", result) end
+
+          if result and type(result) == "table" then
+            local _iLast = #_abilityLog
+            _abilityLog[_iLast] = _abilityLog[_iLast].."\n"
+            table.insert(_abilityLog, data.description or eachAbility)
+            _abilityLog = _abilityHelper.logSources({sources = data.sources, log = _abilityLog})
+
+            _drawData.count = result.count or _drawData.count
+            _drawData.color = result.color or _drawData.color
+          end
         end
 
         -- Deal.
         _deckHelper.deal({
             deck = 'Actions',
-            count = count,
-            color = color
+            count = _drawData.count,
+            color = _drawData.color
         })
-    end
 
-    dealOrder = dealOrder or Turns.order
-    dealOrder = _uniqueList(dealOrder)
-    dealOrder = _restrictToSeated(dealOrder)
+        --announce
+        if #_abilityLog > 1 then
+          _abilityLog[1] =  #_abilityLog > 2 and "Active abilites:\n" or "Active ability"
+          _safeBroadcastToColor(table.concat(_abilityLog, " - "), color, {0.1,0.5,0.1})
+        end
+    end
 
     for _, color in ipairs(dealOrder) do
         processColor(color)
     end
-    broadcastToAll('Dealt Action Cards.')
+    _safeBroadcastToAll('Dealt Action Cards.')
 end
 
 -- "Minister of Policy" gets an action card "at the end of the status phase",
 -- do not mix this in with the standard "draw action cards" action.
-function _dealMinisterOfPolicyActionCard()
-    local ministerOfPolicyColor = false
-    local eliminatedPlayerSet = {}
+function _dealMinisterOfPolicyActionCard(color)
+  if not color then
+    local seatedCols = _zoneHelper.zones()
+    for _,eachCol in ipairs(seatedCols or {}) do
+      local _abilities = _abilityHelper.getActiveAbilities({color = color, context = "Draw Action Cards(Status Phase)"}) or {}
+      local _isMinister = false
+      for eachAbility,_ in pairs(_abilities or {}) do
+        if eachAbility == "Minister of Policy" then
+          color = eachCol
+          _isMinister = true
+          break
+        end
+      end
 
-    local inHandGuidSet = _zoneHelper.inHand()
-    for _, object in ipairs(getAllObjects()) do
-        local name = object.getName()
-        local guid = object.getGUID()
-        if name == 'Minister of Policy' and (not inHandGuidSet[guid]) and (not object.is_face_down) then
-            -- Common practice is one on the laws mat, one in player area.
-            local zoneColor = _zoneHelper.zoneFromPosition(object.getPosition())
-            if zoneColor then
-                ministerOfPolicyColor = zoneColor
-            end
-        end
-        if name == 'Player Eliminated' then
-            local color = _zoneHelper.zoneFromPosition(object.getPosition())
-            if color then
-                eliminatedPlayerSet[color] = true
-            end
-        end
+      if not _isMinister then return end
     end
+  end
+  if _eliminationHelper.isPlayerEliminated(color) then return end
+  local _player = Player[color]
+  if not _player or not _player.seated then
+    _safeBroadcastToAll('The Minister of Policy is not seated - skipping', "Red")
+    return
+  end
 
-    local color = ministerOfPolicyColor
-    if color and not eliminatedPlayerSet[color] then
-        _safeBroadcastToColor('Minister of Policy active.', color, {0.1,0.5,0.1})
-        local count = 1
-        local faction = _factionHelper.fromColor(ministerOfPolicyColor)
-        for _, ability in ipairs(faction and faction.abilities or {}) do
-            if ability == 'Scheming' then
-                count = count + 1
-                _safeBroadcastToColor('Scheming.', color, {0.1,0.5,0.1})
-            end
-        end
-        _deckHelper.deal({
-            deck = 'Actions',
-            count = count,
-            color = color
-        })
+  local _drawAbilities = _abilityHelper.getActiveAbilities({color = color, context = "Draw Action Cards"}) or {}
+  local _dealData = {
+    color = color,
+    count = 1,
+    abilities = _drawAbilities
+  }
+
+  local _logAbilities = {"Active Abilities"}
+  for eachAbility,data in pairs(_drawAbilities) do
+    local _callParams = copyTable(_dealData)
+    _callParams.applyCount = data.count
+    local result = tryCall(data.apply, _callParams)
+
+    if result and type(result) == "table" then
+      local _iLast = #_logAbilities
+      _logAbilities[_iLast] = _logAbilities[_iLast].."\n"
+      table.insert(_logAbilities, data.description or eachAbility)
+      _logAbilities = _abilityHelper.logSources({sources = data.sources, log = _logAbilities})
+
+      _dealData.count = result.count or _dealData.count
+      _dealData.color = result.color or _dealData.color
     end
+  end
+
+  if #_logAbilities > 1 then
+    _logAbilities[1] = #_logAbilities > 2 and "Active Abilities:\n" or "Active Ability"
+    _safeBroadcastToColor(table.concat(_logAbilities, " - "), color, {0.1,0.5,0.1})
+  end
+
+  _deckHelper.deal({
+    deck = 'Actions',
+    count = _dealData.count,
+    color = _dealData.color
+  })
+end
+
+--expectedParams: {color, count, applyCount, abilities}
+function _applyDrawAdditionalAction(params)
+  params = type(params) == "table" and params or {params}
+  local count = params.count or 1
+  local applyCount = params.applyCount or 1
+
+  return {count = count + applyCount}
+end
+
+function _injectDrawAbilities()
+  for id,each in pairs(_actionCardAbilities) do
+    each.silent = true
+    _abilityHelper.registerAbility(each)
+  end
+end
+
+function tryCall(callData, params)
+  local function try()
+    --validate
+    assert(callData and type(callData) == "table")
+    callData.obj = assert(callData.obj ~= nil and callData.obj or getObjectFromGUID(callData.guid))
+    assert(callData.obj ~= nil and type(callData.obj) == "userdata", "callback obj could not be found")
+    assert(callData.func and type(callData.func) == "string" and callData.obj.getVar(callData.func), 'missing ' .. callData.obj.getName() .. '.' .. callData.func)
+
+    --call
+    return callData.obj.call(callData.func, params)
+  end
+  local success, result = pcall(try)
+  if not success then print("Failed callback: callData incorrectly formated: ", result) return end
+  return result
 end
 -------------------------------------------------------------------------------
 
@@ -582,7 +592,7 @@ function recomputeInfluence(includeFaceDown)
                 if name == 'Representative Government' or name == 'Representative Government (PoK)' then
                     if not object.is_face_down and not _deckHelper.isDiscard(guid) then
                         representativeGovernment = true
-                        broadcastToAll('Representative Government active.', {0.1,0.5,0.1})
+                        _safeBroadcastToAll('Representative Government active.', {0.1,0.5,0.1})
                     end
                 end
             end
@@ -611,7 +621,7 @@ function recomputeInfluence(includeFaceDown)
                 table.insert(message, name .. ' (' .. description .. ')')
             end
             message = table.concat(message, ', ')
-            printToAll('Modifiers (' .. color .. '): ' .. message, color)
+            _safePrintToAll('Modifiers (' .. color .. '): ' .. message, color)
         end
     end
 
@@ -786,9 +796,9 @@ function _returnCommandTokens(factionTokenName)
     _putTokenGuidSet = {}
 
     if factionTokenName then
-        broadcastToAll('Returned ' .. putCount .. 'x ' .. factionTokenName .. ' Command Tokens.')
+        _safeBroadcastToAll('Returned ' .. putCount .. 'x ' .. factionTokenName .. ' Command Tokens.')
     else
-        broadcastToAll('Returned Command Tokens.')
+        _safeBroadcastToAll('Returned Command Tokens.')
     end
 end
 
@@ -827,19 +837,19 @@ function _allocateCommandTokens()
     local function processColor(color)
         local faction = _factionHelper.fromColor(color)
         if not faction then
-            broadcastToAll('Allocate command tokens: no faction for ' .. color, 'Red')
+            _safeBroadcastToAll('Allocate command tokens: no faction for ' .. color, 'Red')
             return
         end
 
         local commandTokensBag = nameToCommandTokensBag[faction.tokenName]
         if not commandTokensBag then
-            broadcastToAll('Allocate command tokens: missing ' .. faction.tokenName .. ' Command Tokens Bag', 'Red')
+            _safeBroadcastToAll('Allocate command tokens: missing ' .. faction.tokenName .. ' Command Tokens Bag', 'Red')
             return
         end
 
         local commandSheet = getObjectFromGUID(faction.commandSheetGuid)
         if not commandSheet then
-            broadcastToAll('Allocate command tokens: missing ' .. color .. ' Command Sheet', 'Red')
+            _safeBroadcastToAll('Allocate command tokens: missing ' .. color .. ' Command Sheet', 'Red')
             return
         end
 
@@ -904,7 +914,7 @@ function _allocateCommandTokens()
         processColor(color)
         coroutine.yield(0)
     end
-    broadcastToAll('Gained Command Tokens.')
+    _safeBroadcastToAll('Gained Command Tokens.')
 end
 
 -------------------------------------------------------------------------------
@@ -968,7 +978,7 @@ function _readyCards()
             getObjectFromGUID(guid).flip()
         end
     end
-    broadcastToAll('Readied Cards.')
+    _safeBroadcastToAll('Readied Cards.')
 end
 
 -------------------------------------------------------------------------------
@@ -1020,7 +1030,7 @@ function _repairUnits()
     end
 
     _skipRepairs = {names = {}, guids = {}} --reset skips
-    broadcastToAll('Repaired Units.')
+    _safeBroadcastToAll('Repaired Units.')
 end
 
 -------------------------------------------------------------------------------
@@ -1049,14 +1059,14 @@ function _returnStrategyCards()
       if color and color == politicalStabilityColor then
         local strategyCard = getObjectFromGUID(guid)
         local name = strategyCard.getName()
-        broadcastToAll(color .. ' has Political Stability, not returning ' .. name .. ' strategy card', {0.1,0.5,0.1})
+        _safeBroadcastToAll(color .. ' has Political Stability, not returning ' .. name .. ' strategy card', {0.1,0.5,0.1})
       else
         _returnStrategyCard(guid)
       end
       coroutine.yield(0)
     end
 
-    broadcastToAll('Returned Strategy Cards.')
+    _safeBroadcastToAll('Returned Strategy Cards.')
 end
 
 function _returnStrategyCard(guid, politicalStabilityHolder)
@@ -1066,7 +1076,7 @@ function _returnStrategyCard(guid, politicalStabilityHolder)
   if politicalStabilityHolder then
     local color = _zoneHelper.zoneFromPosition(strategyCard.getPosition())
     if color and color == politicalStabilityHolder then
-      broadcastToAll(color .. ' has Political Stability, not returning ' .. name .. ' strategy card', {0.1,0.5,0.1})
+      _safeBroadcastToAll(color .. ' has Political Stability, not returning ' .. name .. ' strategy card', {0.1,0.5,0.1})
       return
     end
   end
@@ -1232,6 +1242,8 @@ function onLoad(saveState)
         end
     end
     self.setInvisibleTo(invisibleTo)
+
+    _injectDrawAbilities()
 end
 
 function onObjectPickUp(playerColor, pickedUpObject)
