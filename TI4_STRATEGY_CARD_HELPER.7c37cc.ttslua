@@ -214,7 +214,7 @@ function _safePrintToColor(message, playerColor, messageColor)
   printToColor(message, playerColor, messageColor)
 end
 
-function _safePrintToAll(messsage, messageColor)
+function _safePrintToAll(message, messageColor)
   for _, player in ipairs(Player.getPlayers()) do
     _safePrintToColor(message, player.color, messageColor)
   end
@@ -398,6 +398,19 @@ local _actionCardAbilities = {
       }
     },
     apply = {guid = self.getGUID(), func = "_applyDrawAdditionalAction", obj = self}
+  },
+  ["DealMinisterOfPolicy"] = {
+    id = "DealMinisterOfPolicy",
+    description = "Draw an action card",
+    stackable = false,
+    sources = {
+      id = "Minister of Policy",
+      context = "End Status Phase",
+      refs = {OBJECTS = "Minister of Policy"},
+      stackable = false,
+      targetType = "OWNER"
+    },
+    --apply = {guid =self.getGUID(), obj = self, func = _dealMinisterOfPolicyActionCard}
   }
 }
 
@@ -475,23 +488,19 @@ end
 -- "Minister of Policy" gets an action card "at the end of the status phase",
 -- do not mix this in with the standard "draw action cards" action.
 function _dealMinisterOfPolicyActionCard(color)
+  if not _abilityHelper.isAbilityActive({context = "End Status Phase", ability = "DealMinisterOfPolicy", color = color}) then return end
+
   if not color then
     local seatedCols = _zoneHelper.zones()
     for _,eachCol in ipairs(seatedCols or {}) do
-      local _abilities = _abilityHelper.getActiveAbilities({color = color, context = "Draw Action Cards(Status Phase)"}) or {}
-      local _isMinister = false
-      for eachAbility,_ in pairs(_abilities or {}) do
-        if eachAbility == "Minister of Policy" then
-          color = eachCol
-          _isMinister = true
-          break
-        end
+      if _abilityHelper.isAbilityActive({context = "End Status Phase", ability = "DealMinisterOfPolicy", color = eachCol}) then
+        color = eachCol
+        break
       end
-
-      if not _isMinister then return end
     end
+    if not color then return end
   end
-  if _eliminationHelper.isPlayerEliminated(color) then return end
+
   local _player = Player[color]
   if not _player or not _player.seated then
     _safeBroadcastToAll('The Minister of Policy is not seated - skipping', "Red")
@@ -522,9 +531,10 @@ function _dealMinisterOfPolicyActionCard(color)
     end
   end
 
+  _safePrintToAll("The Minister of Policy draws an action card", color)
   if #_logAbilities > 1 then
     _logAbilities[1] = #_logAbilities > 2 and "Active Abilities:\n" or "Active Ability"
-    _safeBroadcastToColor(table.concat(_logAbilities, " - "), color, {0.1,0.5,0.1})
+    _safePrintToColor(table.concat(_logAbilities, " - "), color, {0.1,0.5,0.1})
   end
 
   _deckHelper.deal({

@@ -17,6 +17,7 @@ function getHelperClient(helperObjectName)
     return setmetatable({}, { __index = function(t, k) return getCallWrapper(k) end })
 end
 
+local _elimHelper = getHelperClient('TI4_ELIMINATION_HELPER')
 local _factionHelper = getHelperClient('TI4_FACTION_HELPER')
 local _zoneHelper = getHelperClient('TI4_ZONE_HELPER')
 
@@ -26,7 +27,7 @@ local _toggleUpdate = false
 
 -- abilities are what enable players to use gameEffects. Abilities are used within a CONTEXT
 local CONTEXT = { --converted to table indexed by value during load: ["context"] = true
-  "Frontier Exploration", "Planet Exploration", "Commodities", "Draw Action Cards", "Draw Action Cards(Status Phase)"
+  "Frontier Exploration", "Planet Exploration", "Commodities", "Draw Action Cards", "Draw Action Cards(Status Phase)", "End Status Phase"
 }
 CONTEXT = _hash(CONTEXT)
 local _gameEffects = {
@@ -43,11 +44,13 @@ function isAbilityActive(params)
   assert(CONTEXT[params.context], "Invalid context >"..params.context.."< Check for typos")
 
   getActiveAbilities({context = params.context})
-  local testCols = params.color and {params.color} or _zoneHelper.getZones()
+  local testCols = params.color and {params.color} or _zoneHelper.zones()
   local _effects = _activeEffects[params.context] or false
   for _,eachCol in ipairs(testCols) do
-    local result = _effects and _effects[eachCol] and _effects[eachCol][params.ability] and _effects[eachCol][params.ability].count or false
-    if result then return result end
+    if not _elimHelper.isPlayerEliminated(eachCol) then
+      local result = _effects and _effects[eachCol] and _effects[eachCol][params.ability] and _effects[eachCol][params.ability].count or false
+      if result then return result end
+    end
   end
 
   return false
@@ -58,6 +61,7 @@ end
       color = "color" *optional, gets abilities for this color or for all colors if nil
       forceUpdate = bool*optional --active abilities are only updated once per frame if called. Force update to refresh it again this frame
     }-]]
+--Eliminated factions return an ampty table{}
 --[[return: = { --single {table} or, if getting all colors, a table with {[color] = {return}} keys for each [color]
   ["_effectID"] = {
     count = #,--how many times should this effect be applied
@@ -74,6 +78,7 @@ end
 function getActiveAbilities(params)
   assert(params and type(params) == "table")
   assert(params.context and CONTEXT[params.context], (params.context or "nil").." is not a registered ability context.")
+  if params.color and _elimHelper.isPlayerEliminated(params.color) then return {} end
   _gatherSourceObjs()
 
   if params.forceUpdate or not _activeEffects[params.context] then
@@ -138,7 +143,7 @@ local customGameEffect = {
     {
       id = "Name of Source",
       context = "", -- "" or {table strings}; See CONTEXT for available names
-      isUniversalRule = false, --Is this rule allways in play (within context)? --tardetType must be ALL or GET
+      isUniversalRule = false, --Is this rule allways in play (within context)? --targetType must be ALL or GET
       stackable = true, --can this source stack with itself to apply multiple times?
       --if not universal, refs are how we determine if this source is active/in play
       refs = {
@@ -152,7 +157,8 @@ local customGameEffect = {
 
           requireFaceup = false,
           requireActive = false, --Does the object have a toggle Active button; this will create a toggle button on the object if it is a card
-          isDiscardable = false, --set to true to prevent this object from being found in its discard pile
+          isDiscardable = false, --set to true to prevent this object from being found in its discard pile (refere to the TI4_DECK_HELPER for making this obj part of a deck)
+          activeInHands = false, --objects in a player's hand are not considered active unless you override here
           isCommander = false, --Will add "__ Alliance"
           isPromissory = false, --Will prevent this source from targetting the Promissory note's native faction
         },
@@ -439,14 +445,15 @@ function _gatherSourceObjs()
       return _isToggledActive
     end
 
+    local objsInHand = getHandObjs()
     for _,eachRef in ipairs(mergedResults) do
-      if (not eachRef.requireFaceup or not eachObj.is_face_down)
+      if    (not eachRef.requireFaceup or not eachObj.is_face_down)
         and (not eachRef.requireActive or _getIsToggledActive(eachObj))
-        and (not eachRef.isDiscardable or not _getIsDiscarded(objGUID))
+        and (not eachRef.isDiscardable or not _getIsDiscarded(objGuid))
+        and (eachRef.activeInHands or not objsInHand[objGuid])
       then
         eachRef.source._foundObjects = eachRef.source._foundObjects or {}
         table.insert(eachRef.source._foundObjects, eachObj)
-      else
       end
     end
   end
@@ -721,7 +728,7 @@ function tryCall(callData, params)
 end
 
 local _unpackedFactions = false
---ONLY checks UNPACKED factions, returns color, action.shortName of that faction
+--ONLY checks UNPACKED factions, returns color, action.shortName or frankenName of that faction
 function getNativeFaction(forAbility, category)
   assert(forAbility and type(forAbility) == "string")
   assert(category and type(category) == "string")
@@ -839,6 +846,24 @@ function onObjectSpawn(object)
 end
 
 --------------------------------------------------------------------------------
+
+--params: *optional playerColor, default to getting hand objs for all colors
+--returns: {[objGUID] = handColor}
+function getHandObjs(playerColor)
+    local result = {}
+    local players = playerColor and type(playerColor) == "string" and {Player[playerColor]} or Player.getPlayers()
+    for _, player in ipairs(players) do
+      local numHandZones = player.getHandCount()
+      for i = 1, numHandZones do
+        local zoneObjs = player.getHandObjects(i)
+        for _, object in ipairs(zoneObjs) do
+            result[object.guid] = player.color
+        end
+      end
+    end
+    return result
+end
+
 function initEffects()
   for _,each in ipairs(CONTEXT) do
     CONTEXT[each] = true
