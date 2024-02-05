@@ -25,6 +25,8 @@ function getHelperClient(helperObjectName)
     end
     return setmetatable({}, { __index = function(t, k) return getCallWrapper(k) end })
 end
+
+local _abilityHelper = getHelperClient('TI4_ABILITY_HELPER')
 local _deckHelper = getHelperClient('TI4_DECK_HELPER')
 local _exploreHelper = getHelperClient('TI4_EXPLORE_HELPER')
 local _strategyCardHelper = getHelperClient('TI4_STRATEGY_CARD_HELPER')
@@ -94,10 +96,14 @@ function _exportFaction(f)
     }
 end
 
+--factions can have dynamic commodity values and commoditiess can be mutated by abilities (Dynamis Core)
+local COMMODITIES = {}
+
 local _colorToFaction = {}
 local _lowerTokenNameToFaction = {}
 local _factionCardNameToAbilityFunc = false
 local _factionData = {}
+
 --see injection section for full documentation
 function newFaction(fullName, factionData)
   assert(fullName and type(fullName) == "string")
@@ -110,7 +116,15 @@ function newFaction(fullName, factionData)
       --Every time .commodities is read, it will update and return the faction's commodity value
       --This allows commodity values to be varialbe and to be mutated by abilities
       if key == "commodities" then
-        return getCommodities(table.name)
+        local color = _factionData[table.name].color
+        if not color then
+          --if the faction is not unpacked, lets just return the default, unmodified value.
+          --No need to run an update since comm abilities and variable comm values are not applied/calculated for unused factions
+          return _factionData[table.name].printedCommodities
+        else
+          COMMODITIES.update()
+          return _colorToFaction[color].commodities
+        end
       end
 
       local value = _factionData[table.name][key]
@@ -129,7 +143,7 @@ function newFaction(fullName, factionData)
 
   factionData.name = fullName
   _factionData[name] = factionData
-  _factionData[name].printedCommodities = factionData.printedCommodities or factionData.commodities
+  _factionData[name].printedCommodities = factionData.printedCommodities or type(factionData.commodities) == "number" and factionData.commodities or factionData.commodities.default or 0
   setmetatable(proxy, mt)
   return proxy
 end
@@ -612,23 +626,25 @@ local _factionAttributes = {
   }),
 }
 
---factions can have dynamic commodity values and commoditiess can be mutated by abilities (Dynamis Core)
-local COMMODITIES = {}
-local _commodityMutators = {
+local _commodityAbilities = {
   ['+2 Commodities'] = {
-    type = "ADJUST",
-    sources = {{
-      target = "OWNER",
-      find = {OBJECTS = {"Dynamis Core"}}
-    }},
+    id = '+2 Commodities',
+    sources = {
+      id = "Dynamis Core",
+      context = "Commodities",
+      targetType = "OWNER",
+      refs = {OBJECTS = "Dynamis Core"},
+      stackable = false,
+    },
     stackable = true,
-    callData = {obj = self, func = "applyPlusTwoCommodities"}
+    apply = {guid = self.getGUID(), obj = self, func = "applyPlusTwoCommodities"}
   },
 }
 
 local _update = {
     time = false,
     periodicUpdateSeconds = 30,
+    oncePerFrame = false --variable fields are always updated when querried. This limits that update to max once per frame
 }
 
 local _state = {
@@ -677,9 +693,11 @@ end
 function getCommodities(params)
   assert(params and type(params) == "string" or (type(params) == "table" and params.target == "string"))
   local target = type(params) == "string" and params or params.target
+  local name = _factionData[target] and target or _colorToFaction[target] and _colorToFaction[target].name or false
+  if not name then return 0 end
 
-  COMMODITIES.update(type(params) == "table" and params.forceUpdate)
-  return COMMODITIES.mutate(target)
+  --accessing through the meta table to trigger update
+  return _factionAttributes[name].commodities
 end
 
 --- Return map from player color to list of commander names.
@@ -1000,88 +1018,6 @@ function injectFaction(faction)
     end
 end
 
---[[Mutators such as Dynamis Core that change a faction's commodity value
-local mutatorFormat = {
-  id = "Unique Identifer", --Give this mutator a unique ID
-  --Sources determine when this rule is in play and who it effects
-  sources = { --single table or a table of source tables
-    isUniversalRule = false, --should this mutator always apply?
-    --if not universal, find is how we determine if this source is active/in play
-    find = { --You may ommit any of these subTables
-      FACTION_ABILITIES = {"abilityName_1",...},
-      OBJECTS = {"stringName", objectTable}, --Look for objects that may enable this rule
-       --mixed table of stings/objectTables. objectTables allow additional settings
-       {--objectTable format:
-        --*How to find this object(include only 1)
-        *name = "",
-        *guid = "",
-
-        requireFaceup = false,
-        requireActive = false, --Does the object have a toggle Active button (unit modifier cards only), this does not create a toggel button for the obj
-        isDiscardable = false, --set to true to prevent this object from being found in it's discard pile (if aplicable)
-      },
-      GET = {obj = self, func = "isSourceActive"}, --function should return true if this source is active/in play
-    },
-    --If this source is active/in play, who will it effect?
-    target = "OWNER", --"OWNER"|"OTHER"|"ALL"|"GET" --(OTHER == not OWNER)
-    --if target is "GET", you must include getTarget
-    --getTarget = {obj = self, func = "getTargetFunc"}, --function should return a color or table of colors to target
-
-    --*internal values
-    --isActive = bool,
-    --_activeObjects = {objRef},--objects from refs that have been found (and are faceup/active if required)
-    --_activeAbilityOwners = {[color] = true}, --color indexed list of colors whose factions have an ability found in refs.FACTION_ABILITIES
-  },
-
-  type = "MUTATE", --or "ADJUST" --MUTATE resolves first, then ADJUST effects
-  stackable = false, --can this mutator be applied multiple times to the same player
-
-  callData = {obj = self, func = "myCommodityFunctionName"}, --your function should return the new commodity value as a number
-    --params:{color = targetColor, commodities = #(the current commodity value), printedCommodities = #(The faction's unaltered commodity value)}
-
-  --*Internal fields:
-  --_activeTargets = {} --table of colors: {["Blue"] = #,...} # = the number of times to apply this rule to the target (if rule is stackable)
-}
---]]
-function injectCommodityMutator(params)
-  assert(params and type(params) == "table")
-  assert(params.id and type(params.id) == "string", "You must give your commodity mutator a name/id.")
-  assert(params.type and params.type == "MUTATE" or params.type == "ADJUST", "CommodityMutator.type should be 'MUTATE' or 'ADJUST'.")
-
-  assert(params.callData and type(params.callData) == "table", "CommodityMutator must have a .callData field that is a table containing an object referance(.obj) and the string name of a function on that object's script(.func)")
-  assert(params.callData.func and type(params.callData.func) == "string", "CommodityMutator must have a .callData field that is a table containing an object referance(.obj) and the string name of a function on that object's script(.func)")--Obj does not need to exist at this point
-
-  assert(params.sources and type(params.sources) == "table")
-  local newMutator = copyTable(params)
-  --format sources table
-  newMutator.sources = newMutator.sources[1] and newMutator.sources or {newMutator.sources}
-  for _,eachSource in ipairs(newMutator.sources) do
-    assert((eachSource.find == nil and eachSource.isUniversalRule) or type(eachSource.find) == "table")
-    if eachSource.find then
-      if eachSource.find.OBJECTS then
-        local formatObjTable = (type(eachSource.find.OBJECTS) == "string" and {eachSource.find.OBJECTS}) or eachSource.find.OBJECTS[1] and eachSource.find.OBJECTS or {eachSource.find.OBJECTS}
-        eachSource.find.OBJECTS = formatObjTable
-        for _, objData in ipairs(eachSource.find.OBJECTS) do
-          if type(objData) == "table" then
-            assert((objData.name or objData.guid) and not (objData.name and objData.guid))
-          end
-        end
-      end
-      if eachSource.find.FACTION_ABILITIES then
-        eachSource.find.FACTION_ABILITIES = type(eachSource.find.FACTION_ABILITIES) == "table" and eachSource.find.FACTION_ABILITIES or {eachSource.find.FACTION_ABILITIES}
-      end
-      if eachSource.find.GET then
-        assert(type(eachSource.find.GET) == "table" and eachSource.find.GET.func and type(eachSource.find.GET.func) == "string")
-      end
-    end
-  end
-
-  if _commodityMutators[params.id] then
-    print("INJECTION_WARNING:\nThe commodity mutator ", params.id, " already exists; previous mutator will be replaced.")
-  end
-  _commodityMutators[params.id] = newMutator
-end
-
 --------------------------------------------------------------------------------
 function _getFactionData(faction)
   assert(faction and _factionAttributes[faction])
@@ -1103,191 +1039,14 @@ function _getAllFactionData()
 end
 
 --Commodity utilities-----------------------------------------------------------
-function _reportCommodityMutators()
-  return copyTable(_commodityMutators)
-end
 
---params = {color = targetColor, commodities = #(the current commodity value), printedCommodities = #}
+--params = {color = targetColor, commodities = #(the current commodity value), printedCommodities = #, applyCount = #, applyStep = "MUTATE|ADJUST", abilities = {}}
 function applyPlusTwoCommodities(params)
   assert(params and type(params) == "table")
   assert(params.commodities)
-  return params.commodities + 2
-end
+  if params.applyStep and params.applyStep == "MUTATE" then return end
 
-COMMODITIES._getActiveSources = function()
-  local objectsToFind = {guid = {}, name = {}}--["objName"] = {{sourceRef},{s2},...}
-  local abilitiesToFind = {}
-  local function unpackedFactionsWithAbility(abilityName)
-    --Returns a table of faction names that have this ability and that are also unpacked
-    local result = {}
-    --This func may be run while _colorToFaction is being built, so we'll have to run through _factionData to get factions with a color field
-    for factionName,data in pairs(_factionData) do
-      if data.color then --Faction is unpacked
-        for _,eachAbility in ipairs(data.abilities) do
-          if eachAbility == abilityName then table.insert(result, factionName) break end
-        end
-      end
-    end
-
-    return next(result) and result or false
-  end
-
-  for mutatorID,data in pairs(_commodityMutators) do
-    data._activeTargets = {}
-
-    for _,eachSource in ipairs(data.sources) do
-      eachSource.isActive = eachSource.isUniversalRule or false
-      eachSource._activeObjects = false
-      eachSource._activeAbilityOwners = false
-
-      --Gather a list of objects to find, later we'll search getAllObjects once
-      if eachSource.find then
-        if eachSource.find.GET then
-          eachSource.isActive = tryCall(eachSource.find.GET) or false
-        else
-          local OBJECTS = eachSource.find.OBJECTS and (type(eachSource.find.OBJECTS) == "string" and {eachSource.find.OBJECTS}) or {}
-          for _,objData in ipairs(eachSource.find.OBJECTS or {}) do
-            local findByName = type(objData) == "string" or objData.name or false
-            local key = type(objData) == "string" and objData or objData.name or objData.guid
-            local isTable = type(objData) == "table"
-            if findByName then
-              objectsToFind.name[key] = objectsToFind.name[key] or {}
-              table.insert(objectsToFind.name[key],
-                {source = eachSource,
-                requireFaceup = isTable and objData.requireFaceup,
-                requireActive = isTable and objData.requireActive,
-                isDiscardable = isTable and objData.isDiscardable,
-                })
-            else
-              objectsToFind.guid[key] = objectsToFind.guid[key] or {}
-              table.insert(objectsToFind.guid[key],
-                {source = eachSource,
-                requireFaceup = isTable and objData.requireFaceup,
-                requireActive = isTable and objData.requireActive,
-                isDiscardable = isTable and objData.isDiscardable,
-                })
-            end
-          end
-          --find faction abilities
-          for _,each in ipairs(eachSource.find.FACTION_ABILITIES or {}) do
-            abilitiesToFind[each] = abilitiesToFind[each] or {}
-            table.insert(abilitiesToFind[each], eachSource)
-          end
-        end
-      end
-    end
-  end
-
-  --Get active faction abilities
-  for color,eachFaction in pairs(_colorToFaction or {}) do
-    for _,eachAbility in ipairs(eachFaction.abilities or {}) do
-      for _,eachSource in ipairs(abilitiesToFind[eachAbility] or {}) do
-        eachSource.isActive = true
-        eachSource._activeAbilityOwners = eachSource._activeAbilityOwners or {}
-        eachSource._activeAbilityOwners[color] = true
-      end
-    end
-  end
-
-  --Now seach all objects and find source objects that are on the table
-  for _,eachObj in ipairs(getAllObjects()) do
-    local name = eachObj.getName()
-    local guid = eachObj.getGUID()
-    if objectsToFind.name[name] or objectsToFind.guid[guid] then
-      local mergedResults = objectsToFind.name[name] or {}
-      local foundGUID = objectsToFind.guid[guid] or {}
-      for _,each in ipairs(foundGUID) do
-        table.insert(mergedResults, each)
-      end
-      for _,eachResult in ipairs(mergedResults) do
-        if (not eachResult.requireFaceup or not eachObj.is_face_down)
-            and (not eachResult.requireActive or not _unitHelper._isToggleActiveCard(eachObj) or _unitHelper._isToggleActiveCardActive(eachObj))
-            and (not eachResult.isDiscardable or not _deckHelper.isDiscard(guid))
-            then
-          eachResult.source.isActive = true
-          eachResult.source._activeObjects = eachResult.source._activeObjects or {}
-          table.insert(eachResult.source._activeObjects, eachObj)
-        end
-      end
-    end
-  end
-end
-
-COMMODITIES._getActiveTargets = function()
-  local function getTargetsFromGet(rule, source)
-    local result = tryCall(source.getTarget) or {}
-    return type(result) == "table" and result or {result}
-  end
-
-  local function getTargetsFromOwner(rule, source)
-    local targets = {}
-    --if an ability obj is in a player zone, add that player to targets
-    for _,eachObj in ipairs(source._activeObjects or {}) do
-      local zoneColor = _zoneHelper.zoneFromPosition(eachObj.getPosition())
-      if zoneColor then table.insert(targets, zoneColor) end
-    end
-    --if a faction has the specified ability, add that player to targets
-    for eachCol,bool in pairs(source._activeAbilityOwners or {}) do
-      table.insert(targets, eachCol)
-    end
-
-    return targets
-  end
-
-  local function getTargetsFromOther(rule, source)
-    local allCols = _zoneHelper.zones()
-    local targets = {}
-    local function addOthers(excludeCol)
-      for _,each in ipairs(allCols) do
-        if each ~= excludeCol then
-          table.insert(targets, each)
-        end
-      end
-    end
-
-    --if an ability obj is in a player zone, add other players to targets
-    for _,eachObj in ipairs(source._activeObjects or {}) do
-      local zoneColor = _zoneHelper.zoneFromPosition(eachObj.getPosition())
-      if zoneColor then addOthers(zoneColor) end
-    end
-    --if a faction has the specified ability, add other players to targets
-    for eachCol,bool in pairs(source._activeAbilityOwners or {}) do
-      addOthers(eachCol)
-    end
-
-    return targets
-  end
-
-  local function getTargetsFromAll(rule, source)
-    return _zoneHelper.zones()
-  end
-
-  local switch = {
-    ["GET"] = getTargetsFromGet,
-    ["OWNER"] = getTargetsFromOwner,
-    ["OTHER"] = getTargetsFromOther,
-    ["ALL"] = getTargetsFromAll,
-    ["catch"] = function(rule, source)
-      local errMsg = { val = source.target or "nil", rule = rule.id or "nil"}
-      error("Caught bad value >"..errMsg.val.."< for target type in a source for commodity mutator >"..errMsg.rule.."<")
-      return
-    end
-  }
-
-  --Sets ._activeTargets of each rule to a table of colors that are effected by that rule
-    --._activeTargets = {["Blue"] = 2} #indicates how many times to apply this mutator (if it is stackable)
-  for _,eachRule in pairs(_commodityMutators) do
-    eachRule._activeTargets = {}
-    for _,eachSource in ipairs(eachRule.sources) do
-      if eachSource.isActive then
-        local try = switch[eachSource.target] and eachSource.target or "catch"
-        local result = switch[try](eachRule, eachSource) or {}
-        for _,eachCol in ipairs(result) do
-          eachRule._activeTargets[eachCol] = eachRule.stackable and (eachRule._activeTargets[eachCol] and eachRule._activeTargets[eachCol] + 1) or 1
-        end
-      end
-    end
-  end
+  return {commodities = params.commodities + (2*(params.applyCount or 1))}
 end
 
 local _commoditiesThisFrame = false
@@ -1300,59 +1059,73 @@ COMMODITIES.update = function(forceUpdate)
   end
   _commoditiesThisFrame = Wait.frames(function() _commoditiesThisFrame = false end, 1)
 
-  COMMODITIES._getActiveSources()
-  COMMODITIES._getActiveTargets()
+  --COMMODITIES._getActiveSources()
+  --COMMODITIES._getActiveTargets()
   --update the public faction table
   for eachCol,data in pairs(_colorToFaction or {}) do
-    data.commodities = COMMODITIES.mutate(data.name)
+    data.commodities = COMMODITIES.applyAbilites(data.name)
   end
 end
 
 --target = "color" or "factionName"
-COMMODITIES.mutate = function(target)
-  local faction = _factionData[target] or _colorToFaction[target] and _colorToFaction[target].name or false
+COMMODITIES.applyAbilites = function(target)
+  local faction = _factionData[target] and target or _colorToFaction[target] and _colorToFaction[target].name or false
   if not faction or not _factionData[faction] then return 0 end --faction does not exist or color has not unpacked a faction
 
   local baseValue = _factionData[faction].printedCommodities or 0
-  --For dynamic commodity values: commodities = {obj = self, func = "getCommodityFunc"}
-  --func should be the name of a function on your object's script that returns the commodity value as an integer
 
   --is faction in play?
   local targetColor = _factionData[faction].color
   if not targetColor then
-    return type(baseValue) == "number" and baseValue or 0 --Don't compute variable commodity values for factions not unpacked
+    return baseValue or 0 --Don't compute variable commodity values for factions not unpacked
   end
 
   --else
-  --now apply any mutators to the base commodity value (if faction is unpacked)
-  if type(baseValue) == "table" then baseValue = tryCall(baseValue, {color = targetColor, faction = faction}) or 0 end
-  local adjustedValue = baseValue
+  --now apply any abilities to the base commodity value
+  local commAbilities = _abilityHelper.getActiveAbilities({context = "Commodities", color = targetColor}) or {}
+  local callData = {
+    color = targetColor,
+    commodities = baseValue,
+    printedCommodities = baseValue,
+    abilities = commAbilities
+  }
 
-  for mutName,data in pairs(_commodityMutators) do
-    if data.type == "MUTATE" and data._activeTargets[targetColor] then
-      local count = data._activeTargets[targetColor]
-      for i = 1, count, 1 do
-        adjustedValue = tryCall(data.callData, {color = targetColor, commodities = adjustedValue, printedCommodities = baseValue}) or adjustedValue
-      end
+  --mutate
+  for id, ability in pairs(commAbilities) do
+    local _callParams = copyTable(callData)
+    _callParams.applyCount = ability.count
+    _callParams.applyStep = "MUTATE"
+    local result = tryCall(ability.apply, _callParams)
+    if result and type(result) == "table" then
+      callData.commodities = result.commodities or callData.commodities
     end
   end
 
-  for mutName,data in pairs(_commodityMutators) do
-    if data.type == "ADJUST" and data._activeTargets[targetColor] then
-      local count = data._activeTargets[targetColor]
-      for i = 1, count, 1 do
-        adjustedValue = tryCall(data.callData, {color = targetColor, commodities = adjustedValue, printedCommodities = baseValue}) or adjustedValue
-      end
+  --adjust
+  for id, ability in pairs(commAbilities) do
+    local _callParams = copyTable(callData)
+    _callParams.applyCount = ability.count
+    _callParams.applyStep = "ADJUST"
+    local result = tryCall(ability.apply, _callParams)
+    if result and type(result) == "table" then
+      callData.commodities = result.commodities or callData.commodities
     end
   end
 
-  --print("[",targetColor,"]",faction, " ", baseValue, " --> ", adjustedValue)
-  return adjustedValue
+  return callData.commodities
+end
+
+function _injectLocalCommodityAbilities()
+  for _,each in pairs(_commodityAbilities) do
+    each.silent = true
+    _abilityHelper.registerAbility(each)
+  end
 end
 
 function tryCall(callData, params)
   local function try()
     assert(callData and type(callData) == "table")
+    callData.obj = callData.obj ~= nil and callData.obj or getObjectFromGUID(callData.guid)
     assert(callData.obj ~= nil and type(callData.obj) == "userdata")
     assert(callData.func and type(callData.func) == "string" and callData.obj.getVar(callData.func), 'missing ' .. callData.obj.getName() .. '.' .. callData.func)
     local passParams = params == nil and {} or type(params) == "table" and params or {params}
@@ -1384,10 +1157,7 @@ function contextMenu_fetchCommodities(playerColor, objPos, obj)
     return
   end
 
-  --Read commodities from _factionAttributes to trigger update of commodity mutators/getFunctions
-  COMMODITIES.update()
   local commValue = getCommodities(TA_Color) or 0
-
   if commValue < 1 then return end
 
   local function getBag(objectName)
@@ -1663,18 +1433,17 @@ end
 
 -------------------------------------------------------------------------------
 function _updateCommodityValues()
-  COMMODITIES.update(true)
-  for color,data in pairs(_colorToFaction) do
-    data.commodities = COMMODITIES.mutate(data.name)
-  end
+  COMMODITIES.update()
 end
 
 function _maybeUpdateFactions()
     if not _update.time or (Time.time - _update.time) > _update.periodicUpdateSeconds then
         updateFactions()
-    else
+    elseif not _update.oncePerFrame then
+      _update.oncePerFrame = true
       --if we're not updating everything, then update each unpacked faction's field that is a getter, these may change more frequently
       updateGetValues()
+      Wait.frames(function() _update.oncePerFrame = false end, 1)
     end
 end
 
@@ -3034,10 +2803,7 @@ function onLoad(saveState)
 
     _state = saveState and string.len(saveState) > 0 and JSON.decode(saveState) or _state
 
-    --[[ Add faction names to attributes.
-    for factionName, attributes in pairs(_factionAttributes) do
-        attributes.name = factionName
-    end--]]
+    _injectLocalCommodityAbilities()
 
     _factionCardNameToAbilityFunc = {}
     _factionCardNameToAbilityFunc['Jace X, 4th Air Legion'] = { name = 'Helio Cmd. Array', method = _jacexHeroAbility }
