@@ -61,7 +61,7 @@ end
       color = "color" *optional, gets abilities for this color or for all colors if nil
       forceUpdate = bool*optional --active abilities are only updated once per frame if called. Force update to refresh it again this frame
     }-]]
---Eliminated factions return an ampty table{}
+--Eliminated factions return an empty table{}
 --[[return: = { --single {table} or, if getting all colors, a table with {[color] = {return}} keys for each [color]
   ["_effectID"] = {
     count = #,--how many times should this effect be applied

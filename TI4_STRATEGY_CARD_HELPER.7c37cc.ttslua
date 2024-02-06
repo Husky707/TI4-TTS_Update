@@ -331,7 +331,7 @@ end
 
 -------------------------------------------------------------------------------
 
---- Compute initiative order based on strategy cards and Naalu token.
+--Compute initiative order based on strategy cards and Naalu token.
 function getInitiativeOrder()
     local guidToInitiative = {}
     local guidToPosition = {}

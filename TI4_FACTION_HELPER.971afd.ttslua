@@ -1059,8 +1059,6 @@ COMMODITIES.update = function(forceUpdate)
   end
   _commoditiesThisFrame = Wait.frames(function() _commoditiesThisFrame = false end, 1)
 
-  --COMMODITIES._getActiveSources()
-  --COMMODITIES._getActiveTargets()
   --update the public faction table
   for eachCol,data in pairs(_colorToFaction or {}) do
     data.commodities = COMMODITIES.applyAbilites(data.name)
