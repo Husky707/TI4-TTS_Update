@@ -552,8 +552,8 @@ local _factionAttributes = {
       commodities = 3,
       promissoryNotes = { 'Scepter of Dominion' },
       elimInstructions = {
-        DO = {guid = self.getGUID(), func = "_resolveImperiaElim"},
-        ignore = { OTHERS = {GET = {guid = self.getGUID(), func = "_resolveImperiaElim"}}},
+        DO = {guid = self.getGUID(), func = "_resolveImperiaElim_ME", obj = self},
+        ignore = { OTHERS = {GET = {guid = self.getGUID(), func = "_resolveImperiaElim_OTHER", obj = self}}},
       }
   }),
   ['The Naaz-Rokha Alliance'] = newFaction('The Naaz-Rokha Alliance', {
@@ -855,31 +855,76 @@ function getColorToCommanders()
     return colorToCommanders
 end
 
---returns ANY players' tokens in the target color's strategy pool (Imperia exists)
-function getStrategyTokens(color)
+--returns ANY players' command tokens in the target color's Tactics pool
+function getTacticsTokens(color, _commandSheet)
+  if _commandSheet == nil or type(_commandSheet) ~= "userdata" then
+    local _faction = assert(color and type(color) == "string" and _colorToFaction[color], color.." does not have a faction, cannot get strategy tokens.")
+    _commandSheet = assert(getObjectFromGUID(_faction.commandSheetGuid), "Failed to find "..color.."'s command sheet.")
+  end
+
+  return _getCommandTokensWithinBounds({
+    origin = _commandSheet.getPosition(),
+    A = {x = -2.58, z = 4.53},
+    B = {x = 2.63, z = 4.53},
+    C = {x = 0, z = 0}
+  })
+end
+
+--returns ANY players' command tokens in the target color's Fleet pool
+function getFleetTokens(color, _commandSheet)
+  if _commandSheet == nil or type(_commandSheet) ~= "userdata" then
+    local _faction = assert(color and type(color) == "string" and _colorToFaction[color], color.." does not have a faction, cannot get strategy tokens.")
+    _commandSheet = assert(getObjectFromGUID(_faction.commandSheetGuid), "Failed to find "..color.."'s command sheet.")
+  end
+
+  return _getCommandTokensWithinBounds({
+    origin = _commandSheet.getPosition(),
+    A = {x = 2.63, z = 4.53},
+    B = {x = 4.88, z = 0},
+    C = {x = 0, z = 0}
+  })
+end
+
+--returns ANY players' command tokens in the target color's strategy pool
+function getStrategyTokens(color, _commandSheet)
+  if _commandSheet == nil or type(_commandSheet) ~= "userdata" then
+    local _faction = assert(color and type(color) == "string" and _colorToFaction[color], color.." does not have a faction, cannot get strategy tokens.")
+    _commandSheet = assert(getObjectFromGUID(_faction.commandSheetGuid), "Failed to find "..color.."'s command sheet.")
+  end
+
+  return _getCommandTokensWithinBounds({
+    origin = _commandSheet.getPosition(),
+    A = {x = 4.88, z = 0},
+    B = {x = 2.63, z = -4.53},
+    C = {x = 0, z = 0}
+  })
+end
+
+--params: "color" or {color, mask = "TACTICS|FLEET|STRATEGY" *Optional, defaults to getting all on sheet. Mask can be a string or table of strings}
+--returns: { [guid1] = {obj = objectRef, pool = "TACTICS"}} --found tokens keyed by guid.
+function getCommandSheetTokens(params)
+  local color = assert(type(params) == "string" and params or params.color, "Failed to provide a color target to find command tokens for.")
   local _faction = assert(color and type(color) == "string" and _colorToFaction[color], color.." does not have a faction, cannot get strategy tokens.")
   local _commSheet = assert(getObjectFromGUID(_faction.commandSheetGuid), "Failed to find "..color.."'s command sheet.")
 
-  local _allTokens = {}
-  for eachCol,faction in pairs(_colorToFaction) do
-    _allTokens[(faction.tokenName .. " Command Token")] = true
-    _allTokens[(eachCol .. " Command Token")] = true
+  local searchList = {"TACTICS", "FLEET", "STRATEGY"}
+  if type(params) == "table" and params.mask then
+    searchList = type(params.mask) == "table" and params.mask or {params.mask}
   end
+
+  local switch = {
+    ["TACTICS"] = getTacticsTokens,
+    ["FLEET"] = getFleetTokens,
+    ["STRATEGY"] = getStrategyTokens,
+    ["catch"] = function() error("Bad pool request in getCommandSheetTokens") return {} end
+  }
 
   local result = {}
-  local function _isTokenInStrat(tokenObj)
-    if eachObj.is_face_down then return false end
-    local pos = _commSheet.positionToLocal(tokenObj.getPosition())
-    if pos.x < 2 and pos.x > -4 and pos.z > -0.3 and pos.z < 3.5 then
-      return true
-    end
-    return false
-  end
-
-  for _,eachObj in ipairs(getAllObjects()) do
-    local oName = eachObj.getName()
-    if _isTokenInStrat(eachObj) then
-      table.insert(result, eachObj)
+  for _,eachPool in ipairs(searchList) do
+    local try = switch[eachPool] and eachPool or "catch"
+    local rawResult = switch[try](color, _commSheet) or {}
+    for _,eachResult in ipairs(rawResult) do
+      result[eachResult.getGUID()] = {obj = eachResult, pool = eachPool}
     end
   end
 
@@ -913,6 +958,7 @@ local factionFormat = {
   --heroAbility = {guid = self.getGUID(), func = "resolveHeroAbility", abilityName = "optionalName"},
     --params: {obj = cardObjRef, usingColor = ""color of player resolving ability}
     --return true to purge the card
+  startMessage = false,--"Say something nice", --Message is broadcast to players when the faction is unpacked
 
   --eliminationQuotes = "String" or table of {"Strings",...}(will be randomly chosen)
   elimInstructions = {--Only resolved whan an elim is automated (not just declared)
@@ -1786,6 +1832,67 @@ function tintTokens(params)
     end
 end
 
+local _tokensThisFrame = false
+--bounds = {A = {x, z}, B = {x, z}, C = {x, z}, origin = {x, z}(world position)} --ABC represents the 3 points of a triangle in local space to the origin
+function _getCommandTokensWithinBounds(bounds)
+  assert(bounds and type(bounds) == "table" and bounds.A and bounds.origin)
+  local function _getTokens()
+    if _tokensThisFrame then return _tokensThisFrame.names, _tokensThisFrame.objs end
+
+    _tokensThisFrame = {names = {}, objs = {}}
+    for eachCol,faction in pairs(_colorToFaction) do
+      _tokensThisFrame.names[(faction.tokenName .. " Command Token")] = true
+      _tokensThisFrame.names[(eachCol .. " Command Token")] = true
+    end
+    for _,eachObj in ipairs(getAllObjects()) do
+      if _tokensThisFrame.names[eachObj.getName()] then
+        table.insert(_tokensThisFrame.objs, eachObj)
+      end
+    end
+
+    Wait.frames(function() _tokensThisFrame = false end, 1)
+    return _tokensThisFrame.names, _tokensThisFrame.objs
+  end
+  local _tokenNames, _tokenObjs = _getTokens()
+
+  local result = {}
+  for _,eachToken in ipairs(_tokensThisFrame.objs or {}) do
+    local pos = eachToken.getPosition()
+    pos.x = pos.x - bounds.origin.x + 0.03
+    pos.z = pos.z - bounds.origin.z
+    if _triangleContainsPoint(bounds, pos) then table.insert(result, eachToken) end
+  end
+
+  return result
+end
+
+--triangle = {A = {x, z}, B = {x, z}, C = {x, z}}, point = {x, z}
+function _triangleContainsPoint(triangle, point)
+  local function area(x1, y1, x2, y2, x3, y3)
+    return math.abs((x1*(y2-y3) + x2*(y3-y1)+ x3*(y1-y2))/2.0)
+  end
+
+  --A function to check whether point P(x, y) lies inside the triangle formed by A(x1, y1), B(x2, y2) and C(x3, y3) */
+  local function isInside(x1, y1, x2, y2, x3, y3, x, y)
+    --Calculate area of triangle ABC */
+    local A = area (x1, y1, x2, y2, x3, y3)
+
+    --Calculate area of triangle PBC */
+    local A1 = area (x, y, x2, y2, x3, y3)
+
+    --Calculate area of triangle PAC */
+    local A2 = area (x1, y1, x, y, x3, y3)
+
+    --Calculate area of triangle PAB */
+    local A3 = area (x1, y1, x2, y2, x, y)
+
+    --Check if sum of A1, A2 and A3 is same as A */
+    return A == (A1 + A2 + A3)
+  end
+
+  return isInside(triangle.A.x, triangle.A.z, triangle.B.x, triangle.B.z, triangle.C.x, triangle.C.z, point.x, point.z)
+end
+
 -------------------------------------------------------------------------------
 
 local _animatingGuids = {}
@@ -2623,88 +2730,111 @@ local function _replaceTitanSleeperToken(sleeperTokenObject, clickingColor, repl
     sleeperTokensBag.putObject(sleeperTokenObject)
 end
 
-function _resolveImperiaElim(elimParams)
+--return other players' tokens to their reinforcements (assume any Alliance or cammander cards are coppies and ignore; Players can handle them if need be)
+function _resolveImperiaElim_ME(elimParams)
   assert(elimParams and type(elimParams) == "table" and elimParams.color)
   local function _getImperiaPlayer()
-    for eachCol, faction in ipairs(_colorToFation) do
+    for eachCol, faction in pairs(_colorToFaction) do
       for _,eachAbility in ipairs(faction.abilities or {}) do
-        if eachAbility == "Imperia" then return eachCol end
+        if eachAbility == 'Imperia' then return eachCol end
       end
     end
     return false
   end
   local _imperiaPlayer = assert(_getImperiaPlayer(), "No unpacked faction has Imperia")
-  local tokens = getStrategyTokens(_imperiaPlayer) or {}
+  if elimParams.color ~= _imperiaPlayer then return end
+  local tokens = getFleetTokens(_imperiaPlayer) or {}
   local _myToken = (_colorToFaction[_imperiaPlayer].tokenName .. " Command Token")
 
-  if elimParams.color == _imperiaPlayer then
-    printToAll("|~Returning Imperia command tokens...", "Yellow")
-    --return other players' tokens to their reinforcements (assuming any Alliance or cammander cards are coppies; Players can handle them if need be)
-    local _neededTokenBags = {}
-    local _tokensToReturn = {}
-    --get other players' tokens
-    for _,eachToken in ipairs(tokens) do
-      local oName = eachToken.getName()
-      if oName ~= _myToken then
-        local _bagName = (oName.."s Bag")
-        _neededTokenBags[_bagName] = true
-        _tokensToReturn[eachToken.guid] = {bag = _bagName, obj = eachToken, name = oName}
-      end
+  printToAll("|\n|~Returning Imperia command tokens...", "Yellow")
+  local _neededTokenBags = {}
+  local _tokensToReturn = {}
+  --get other players' tokens
+  for _,eachToken in ipairs(tokens) do
+    local oName = eachToken.getName()
+    if oName ~= _myToken then
+      local _bagName = (oName.."s Bag")
+      _neededTokenBags[_bagName] = true
+      _tokensToReturn[eachToken.guid] = {bag = _bagName, obj = eachToken, name = oName}
     end
-    if not next(_tokensToReturn) then printToAll("|   No tokens found", "Yellow") return end
-    --find bags
-    for _,eachObj in ipairs(getAllObjects()) do
-      if eachObj.type == "Bag" then
-        local oName = eachObj.getName()
-        if _neededTokenBags[oName] then _neededTokenBags[oName] = eachObj end
-      end
-    end
-    local _failedBags = {"|"}
-    local _success = {"|"}
-    --return objs
-    for guid,eachToken in pairs(_tokensToReturn) do
-      local bag = _neededTokenBags[eachToken.bag]
-      if bag ~= nil then
-        bag.putObject(eachToken.obj)
-        table.insert(_success, eachToken.name)
-      else
-        table.insert(_failedBags, eachToken.bag)
-      end
-    end
+  end
+  if not next(_tokensToReturn) then printToAll("|   No tokens found", "Yellow") return end
 
-    --log results
-    _success[1] = "|    Found and returned "..#_success.." command tokens:\n"
-    printToAll(table.concat(_success, " - "), "Yellow")
-    if #_failedBags > 1 then
-      _failedBags[1] = "!ERROR! Could not find bags:\n"
-      printToAll(table.concat(_failedBags, " - "), "Red")
+  --find bags
+  for _,eachObj in ipairs(getAllObjects()) do
+    if eachObj.type == "Bag" then
+      local oName = eachObj.getName()
+      if _neededTokenBags[oName] then _neededTokenBags[oName] = eachObj end
     end
-    return
-  else --tell the elimAutomator to ignore any of the elim'd player's command tokens and alliance notes in my play area
-    local _imperiaComponents = {guids = {}, names = {}}--table of guids. Guid for each other players' token and the guid of that player's Alliance and commander card
-    for _,eachToken in ipairs(tokens) do
-      local oName = eachToken.getName()
-      if oName ~= _myToken then
-        local _faction = fromTokenName(oName)
-        if _faction then
-          table.insert(_imperiaComponents.guids, eachToken.getGUID())
-          local _allianceName = (_faction.shortName or _faction.frankenName or "Nil").. " Alliance"
-          table.insert(_imperiaComponents.names, _allianceName)
-          table.insert(_imperiaComponents.names, _faction.commander or "NIL COMMANDER")
-        end
+  end
+
+  --return objs
+  local _failedBags = {"|"}
+  local _success = {"|"}
+  for guid,eachToken in pairs(_tokensToReturn) do
+    local bag = _neededTokenBags[eachToken.bag]
+    if bag and type(bag) == "userdata" and bag ~= nil then
+      bag.putObject(eachToken.obj)
+      table.insert(_success, eachToken.name)
+    else
+      table.insert(_failedBags, eachToken.bag)
+    end
+  end
+
+  --log results
+  _success[1] = "|    Found and returned "..#_success.." command tokens:\n|"
+  printToAll(table.concat(_success, " - "), "Yellow")
+  if #_failedBags > 1 then
+    _failedBags[1] = "!ERROR! Could not find bags:\n"
+    printToAll(table.concat(_failedBags, " - "), "Red")
+  end
+end
+
+--tell the elimAutomator to ignore any of the elim'd player's command tokens and alliance notes in Imperia player's play area
+function _resolveImperiaElim_OTHER(elimParams)
+  assert(elimParams and type(elimParams) == "table" and elimParams.color)
+  local function _getImperiaPlayer()
+    for eachCol, faction in pairs(_colorToFaction) do
+      for _,eachAbility in ipairs(faction.abilities or {}) do
+        if eachAbility == 'Imperia' then return eachCol end
       end
     end
-    --find only named objects that are in MY play area (convert names to guids)
-    for _,eachObj in ipairs(getAllObjects()) do
-      local oName =  eachObj.getName()
+    return false
+  end
+  local _imperiaPlayer = assert(_getImperiaPlayer(), "No unpacked faction has Imperia")
+  if elimParams.color == _imperiaPlayer then return end
+  local tokens = getFleetTokens(_imperiaPlayer) or {}
+  local _myToken = (_colorToFaction[_imperiaPlayer].tokenName .. " Command Token")
+
+  local _imperiaComponents = {guids = {}, names = {}}--table of guids. Guid for each other players' token and the guid of that player's Alliance and commander card
+  for _,eachToken in ipairs(tokens) do
+    local oName = eachToken.getName()
+    if oName ~= _myToken then
+      local _faction = fromTokenName(oName)
+      if _faction then
+        table.insert(_imperiaComponents.guids, eachToken.getGUID())
+        local _allianceName = (_faction.shortName or _faction.frankenName or "Nil").. " Alliance"
+        _imperiaComponents.names[_allianceName] = true
+        _imperiaComponents.names[_faction.commander] = true
+      end
+    end
+  end
+  --find only named objects that are in MY play area (convert names to guids)
+  for _,eachObj in ipairs(getAllObjects()) do
+    if eachObj.type == "Card" then
+      local oName = eachObj.getName()
       if _imperiaComponents.names[oName] and _zoneHelper.zoneFromPosition(eachObj.getPosition()) == _imperiaPlayer then
         table.insert(_imperiaComponents.guids, eachObj.getGUID())
       end
     end
-    _imperiaComponents.names = nil --names converted to specific guids
-
-    return _imperiaComponents
   end
+  _imperiaComponents.names = nil --names converted to specific guids
+
+  if #_imperiaComponents.guids >= 1 then
+    printToAll("|", "Yellow")
+    printToAll("|   Imperia keeps the "..elimParams.color.." player's command token.", _imperiaPlayer)
+  end
+  return _imperiaComponents
 end
 
 --------------------------------------------------------------------------------
