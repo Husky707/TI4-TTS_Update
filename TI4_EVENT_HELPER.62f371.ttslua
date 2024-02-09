@@ -43,7 +43,9 @@ local events =
   },
   ["resolvePlayerEliminated"] = {--params = {color = "eliminatedPlayerColor"} For scripts that want to alter board state after the automator resolved the elim
     defaultCallback = "onResolvePlayerEliminated"
-  }
+  },
+
+  ["exampleEvent"] = {defaultCallback = "onExampleEvent"}
 }
 
 local _workingEvents = {}--{[eventName] = co}
