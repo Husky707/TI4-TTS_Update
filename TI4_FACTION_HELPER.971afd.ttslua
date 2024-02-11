@@ -1485,7 +1485,7 @@ function _maybeUpdateFactions()
         updateFactions()
     elseif not _update.oncePerFrame then
       _update.oncePerFrame = true
-      --if we're not updating everything, then update each unpacked faction's field that is a getter, these may change more frequently
+      --if we're not updating everything, then update each unpacked faction's field that is a getter, as these may change more frequently
       updateGetValues()
       Wait.frames(function() _update.oncePerFrame = false end, 1)
     end
@@ -1740,9 +1740,10 @@ function updateGetValues()
   for eachColor, data in pairs(_colorToFaction or {}) do
     for k,v in pairs(_factionData[data.name] or {}) do
       --_factionAttributes is a proxy table.
-        --It will return the correct, updated value for v (k may be a getter)
+        --It will return the correct, updated value for v (.k may be a getter)
       local val = _factionAttributes[data.name].k
-      data.k = type(val) == "table" and copyTable(val) or val
+      --data.k = type(val) == "table" and copyTable(val) or val
+      data.k = val --decided not to copy tables here. _colorToFaction tables are coppied when sent to other scripts anyways and the table ref is safe in this script
     end
   end
 end
@@ -1908,7 +1909,6 @@ function onObjectDestroy(dyingObject)
         _animatingGuids[guid] = nil
     end
 end
-
 
 local _purgeBagGuid = nil
 function getPurgeBag()

@@ -78,7 +78,7 @@ local AnimClip = {}
 local ToggleButton = {}
 local MultiRoller = {} --logic responible for responding to roll requests
 local Invasion = {} --Handles the more complex invasion UI
-local Plasma = { enabled = false, visible = false, target = false, offset = "-143 -6.2", focusOffset = "-123 -34"}
+local Plasma = { enabled = false, visible = false, target = false, offset = "-143 -6.2", focusOffset = ""..-382/2.3.." "..334/2.3, focusScale = "0.6 0.6 1"}
 local PShield = {enabled = false, visible = false, status = {}}
 local Planets = { --Handles the planet UI, closely connected to Invasion
   layouts = { --planet count to transforms
@@ -102,7 +102,29 @@ local Planets = { --Handles the planet UI, closely connected to Invasion
     ["cultural"] = "Icon_Cultural",
     ["hazardous"] = "Icon_Hazardous"
   },
-  --focus = { scale = 2, pos = "0 0", traitOffset = {x = 0, y = 10}},
+  focusBanner = {--where should a planet's buttons be located while the planet is in/out of focus
+    inFocus = {
+      quickBomb = { --bomb/pds positions
+        width = (228.0 * 0.85)/2.3,
+        height = 199.0 * 0.85/2.3,
+        offset = ""..(-280)/2.3.." "..(359.5 + 45)/2.3 --"-280 359.5",
+      },
+      quickPDS = {
+        width = 170.0 * 0.85/2.3,
+        height = 148.0 * 0.85/2.3,
+        offset = ""..(185+10)/2.3.." "..(409 + 30)/2.3--"185 409",
+      }
+    },
+    outOfFocus = {
+      quickRoll = { --bomb/pds positions
+        width = 128.0 * 0.85,
+        height = 106.0 * 0.85,
+        offsetLeft = "-221 -49.6",
+        offsetRight = "221 -49.6",
+      },
+    }
+
+  },
   animationData = {},
 
   defaults = {
@@ -418,7 +440,8 @@ local ui = {
       --url = "http://cloud-3.steamusercontent.com/ugc/2107179998407444982/F8769B192F10D96104BA9F11C7F87872EBBF59F3/", --fontRef
     },
     { name = "FocusPlanet_Banner",
-      url = "http://cloud-3.steamusercontent.com/ugc/2270441745051765453/B68CB40584F23C63BDB4EA4223A0BE55AE9DC0EC/"
+      url = "http://cloud-3.steamusercontent.com/ugc/2334622478624967535/D3D73F4DB45C7FD455A01C7B7195CF4C9B928650/"
+      --url = "http://cloud-3.steamusercontent.com/ugc/2270441745051765453/B68CB40584F23C63BDB4EA4223A0BE55AE9DC0EC/"
     },
 
     --Wire Planets
@@ -479,10 +502,10 @@ local ui = {
       url = "http://cloud-3.steamusercontent.com/ugc/2270441745051767754/97E1B8571740E9968B08E4259760DD55F282F9B6/"
     },
     { name = "PlanetaryShield_Enabled",
-      url = "http://cloud-3.steamusercontent.com/ugc/2270441745051767986/80B165CCE4B8ECD81FFD35580527BC5A21A996B0/"
+      url = "http://cloud-3.steamusercontent.com/ugc/2334622478624881007/148454EC9C436C4FA1FBD8EDA8EE14564472DC54/"
     },
     { name = "PlanetaryShield_Disabled",
-      url = "http://cloud-3.steamusercontent.com/ugc/2270441745051767916/FFA636DEB1842C29862A47972BC697977EF74005/"
+      url = "http://cloud-3.steamusercontent.com/ugc/2334622478624880902/DECA6DE77A683D2D1413FD53C4740FB16D813265/"
     },
 
     --Quick buttons
@@ -893,6 +916,17 @@ local ui = {
                       height = 1100,
                     },
                     children = {}
+                  },
+                  {--Focus banner
+                    tag = "Image",
+                    attributes = {
+                      id = "Img_FocusBanner",
+                      image = "FocusPlanet_Banner",
+                      preserveAspect = true,
+                      width = 452 * 2.6,
+                      offsetXY = "0 -477",
+                      active = false
+                    }
                   },
                   --Planets injected here
                 }
@@ -1405,6 +1439,47 @@ function setSystemHighlighter(params)
   end
 end
 
+--Moves the player's camera over to the Tactician
+function lookAtMe(playerColor, _myPos)
+  local player = playerColor and Player[playerColor]
+  if not player or not player.seated then return end
+
+  player.lookAt({
+    position = _myPos or self.getPosition(),
+    pitch    = 85,
+    yaw      = self.getRotation().y - 180,
+    distance = 20,
+  })
+end
+
+--Moves the lookingPlayer's camera over to the lookTarget's play area
+--params = {lookingPlayer = color, lookTarget = color}
+function lookAtPlayer(params)
+  assert(params and type(params) == "table")
+  local lookingColor = assert(params.lookingPlayer or type(params[1]) == "string" and params[1], "Failed to assign a looking player")
+  local lookingPlayer = Player[lookingColor]
+  if not lookingPlayer or not lookingPlayer.seated then return end
+
+  local targetColor = assert(params.lookTarget or type(params[2]) == "string" and params[2], "Failed to give a target to look at.")
+  local function _getLookAt(color)
+    local zones = _zoneHelper.zonesAttributes() or {}
+    for _,each in ipairs(zones) do
+      if each.color == color then
+        local rotation = each.center.z >= 0 and 180 or 0
+        return {each.center, rotation}
+      end
+    end
+  end
+
+  local lookData = assert(_getLookAt(targetColor), "The "..targetColor.." player does not have a zone.")
+
+  lookingPlayer.lookAt({
+    position = lookData[1],
+    yaw = lookData[2],
+    pitch = 80,
+    distance = 35
+  })
+end
 
 --UI----------------------------------------------------------------------------
 ui.setSubheaderTxt = function(state)
@@ -1440,6 +1515,7 @@ ui.generateXML = function(callback)
           color = colIndex[i],
           preserveAspect = true,
           active = false,
+          onClick = self.getGUID().."/onButtonClicked_LookAtPlayer"
         },
         children = {}
       }
@@ -3214,24 +3290,35 @@ Planets.setPlanet = function(index, planetData, pCount, params)
   end
 
   --else
+  local inFocus = Invasion.focus and index == Invasion.iFocus or false
   ui.batchSet(id, {active = true, offsetXY = params.offset or Planets.getOffset(index), scale = params.scale or Planets.getScale(index)})
   ui.batchSet(id.."_ColorRing", {active = true, interactable = true, color = Planets.getOwner(index)})
   ui.batchSet(id.."_Planet", {image = getPlanetImage(), color = (planetData.trait or planetData.name == "Mecatol Rex") and "White" or getFactionColor()})
   ui.batchSet(id.."_HS", {active = params.isHS and true or false, color = "Orange"}) --getFactionColor("secondary")})
   ui.batchSet(id.."_Txt", {text = string.upper(planetData.name)})
   ui.batchSet(id.."_Trait", {active = planetData.trait and true or false})
+
+  --Elements effected by focus
   if planetData.trait and Planets.traits[planetData.trait] then
     ui.batchSet(id.."_Trait", {
       image = Planets.traits[planetData.trait],
-      offsetXY = "0 " .. (Invasion.focus and index == Invasion.iFocus and Planets.traits.data.focusOffset or Planets.traits.data.offset)
+      offsetXY = "0 " .. (inFocus and Planets.traits.data.focusOffset or Planets.traits.data.offset)
     })
   end
-  --enable buttons
-  ui.batchSet(id.."_QuickBombard", {active = true, interactable = true})
-  ui.batchSet(id.."_QuickPDS", {active = true, interactable = true})
-
-  --Move Plasma while in focus
-  ui.batchSet("p"..index.."_Btn_PlasmaScoring", { offsetXY = Invasion.focus and index == Invasion.iFocus and Plasma.focusOffset or Plasma.offset})
+  ui.batchSet("p"..index.."_Btn_PlasmaScoring", {
+    offsetXY = inFocus and Plasma.focusOffset or Plasma.offset,
+    scale = inFocus and Plasma.focusScale or "1 1 1"
+  })
+  ui.batchSet(id.."_QuickBombard", {active = true, interactable = true,
+    offsetXY = inFocus and Planets.focusBanner.inFocus.quickBomb.offset or Planets.focusBanner.outOfFocus.quickRoll.offsetLeft,
+    width = inFocus and Planets.focusBanner.inFocus.quickBomb.width or Planets.focusBanner.outOfFocus.quickRoll.width,
+    height = inFocus and Planets.focusBanner.inFocus.quickBomb.height or Planets.focusBanner.outOfFocus.quickRoll.height,
+  })
+  ui.batchSet(id.."_QuickPDS", {active = true, interactable = true,
+    offsetXY = inFocus and Planets.focusBanner.inFocus.quickPDS.offset or Planets.focusBanner.outOfFocus.quickRoll.offsetRight,
+    width = inFocus and Planets.focusBanner.inFocus.quickPDS.width or Planets.focusBanner.outOfFocus.quickRoll.width,
+    height = inFocus and Planets.focusBanner.inFocus.quickPDS.height or Planets.focusBanner.outOfFocus.quickRoll.height,
+  })
 end
 
 Planets.Animator = false
@@ -3259,6 +3346,7 @@ Planets.setFocus = function(params, disable)
   if skipAnim then
     Planets._displayedFocus = Invasion.focus
     Planets.buildActiveSystem(tryCallback, skipAnim)
+    ui.batchSet("Img_FocusBanner", {active = Invasion.focus and true and not disable})
     return
   end
   --else
@@ -3297,6 +3385,7 @@ Planets.setFocus = function(params, disable)
   --temp
   Planets.buildActiveSystem(tryCallback, skipAnim)
   Planets._displayedFocus = Invasion.focus
+  ui.batchSet("Img_FocusBanner", {active = Invasion.focus and true and not disable})
   --^Temp
 end
 
@@ -5075,6 +5164,12 @@ function onPlasmaTargetSelected(clickerPlayer, mouseBtn, btnID)
   Plasma.setTarget(pIndex, "toggle")
 end
 
+function onButtonClicked_LookAtPlayer(clickerPlayer, mouseBtn, btnID)
+  if mouseBtn ~= "-1" then return end
+  local btnColor = self.UI.getAttribute(btnID, "color")
+  lookAtPlayer({clickerPlayer.color, btnColor})
+end
+
 --TI4 Event receivers-----------------------------------------------------------
 
 --from "Strategy Card Mat"
@@ -5234,9 +5329,10 @@ function onLoad(save_state)
       _cmdToken.canAnimate = true
       Tac.setState(Tac.eStates.Main())
       self.addContextMenuItem("Set Active Player", context_setActivePlayer)
-      self.addContextMenuItem("Set State", context_setState)
+      self.addContextMenuItem("Set State", context_setState)--dev command
       self.addContextMenuItem("Toggle Animations", context_toggleAnimations)
       self.addContextMenuItem('Toggle "Roll For Me"', context_toggleRollForMe)
+      self.addContextMenuItem("Look At Me", context_lookAtMe)
       ui.hideOnInit()
     end
 
@@ -5342,6 +5438,11 @@ function context_toggleRollForMe(clickerColor, objPos, obj)
   local abled = Tac.rollForMe[clickerColor] and "enabled" or "disabled"
   pcall(printToAll("The "..clickerColor.." player has "..abled.." the ability for other players to roll for them on the TI4 Tactician.", clickerColor))
   Player[clickerColor].clearSelectedObjects()
+end
+
+function context_lookAtMe(clickerColor, objPos, obj)
+  Player[clickerColor].clearSelectedObjects()
+  lookAtMe(clickerColor, objPos)
 end
 
 --Misc functions----------------------------------------------------------------
