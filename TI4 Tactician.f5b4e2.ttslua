@@ -1151,7 +1151,6 @@ local ui = {
           hideAnimation = "FadeOut",
           showAnimationDelay = 0.2,
           animationDuration = 0.4
-          --active = false
         },
         children = {
           {--GhostMask
@@ -1303,6 +1302,10 @@ local ui = {
       fontSize = 82,--48,
     },
   },
+
+  --Used to work around TTS's anoying ui.show/hide and ui.active interation
+  --Elements with a show/hide have their duration adjusted if animations are disabled to mimic setActive
+  _showData = {},--{[btnID] = {duration, currentDuration}}
 
   stratAssignments = {},
   _batchChanges = {},
@@ -1496,6 +1499,14 @@ local xmlIndex = {turns = 8, move = 3, SpC = 4, Inv = 5, InvLabel = 7, planets =
 ui.generateXML = function(callback)
   ui.onXmlInjected = callback
 
+  --regiset show/hide animations
+  ui.registerShow("icon_agenda", 1.25)
+  ui.registerShow("Header_Gradient", 2)
+  ui.registerShow("Header_GradientTransition", 1.5)
+  ui.registerShow("Header_Deco", 2)
+  ui.registerShow("Header_DecoTransition", 1.5)
+  ui.registerShow("Img_FooterFade", 0.4)
+
   local function turnUI()
     --Turn buttons
     local colIndex = data.playableColors
@@ -1548,9 +1559,7 @@ ui.generateXML = function(callback)
           active = false
         }
       }
-                   --Root    --> TurnsPanel --AlignmentPnl--TurnButtonsPnl
-      --table.insert(ui.xmlTable[1].children[xmlIndex.turns].children[1].children[1].children, xmlButton)
-      --table.insert(ui.xmlTable[1].children[xmlIndex.turns].children[1].children[1].children, passBar)
+
       ui.insertXml(xmlButton, "Pnl_TurnButtons")
       ui.insertXml(passBar, "Pnl_TurnButtons")
     end
@@ -2082,12 +2091,67 @@ ui.generateXML = function(callback)
   planets()
 end
 
+local _elementsToHideOnInit = {}--array of elementIDs
 ui.hideOnInit = function()
   for i = 1, 5, 1 do
     local _id = "p"..i
-    self.UI.hide(_id.."_ShieldEnabled")
+    self.UI.show(_id.."_ShieldEnabled")
     self.UI.hide(_id.."_ShieldDisabled")
   end
+
+  local count = #_elementsToHideOnInit
+  for i = 1, count do
+    self.UI.hide(_elementsToHideOnInit[i])
+  end
+end
+
+ui.registerShow_XML = function(elementXML, hideOnInit)
+  ui._showData[elementXML.id] = {
+    duration = elementXML.animationDuration,
+    currentDuration = elementXML.animationDuration
+  }
+  if hideOnInit then table.insert(_elementsToHideOnInit, elementXML.id) end
+end
+
+ui.registerShow = function(elementID, duration, hideOnInit)
+  ui._showData[elementID] = {
+    duration = duration,
+    currentDuration = duration
+  }
+  if hideOnInit then table.insert(_elementsToHideOnInit, elementID) end
+end
+
+ui.setElementShowing = function(elementID, toState, skipAnimation)
+  --Simply use set active for elements without a show/hide animation
+  if not ui._showData[elementID] then ui.batchSet(elementID, {acitve = toState}) return end
+  --else
+  local data = ui._showData[elementID]
+  skipAnimation = Tac.disableAnimations or skipAnimation
+  if skipAnimation then --set thge animationDuration to 0 to mimic setActive
+    if data.currentDuration ~= 0 then
+      data.currentDuration = 0
+      self.UI.setAttribute(elementID, "animationDuration", 0)
+    end
+  else
+    if data.currentDuration ~= data.duration then
+      data.currentDuration = data.duration
+      self.UI.setAttribute(elementID, "animationDuration", data.duration)
+    end
+  end
+
+  if toState then
+    self.UI.show(elementID)
+  else
+    self.UI.hide(elementID)
+  end
+end
+
+ui.showElement = function(elementID, skipAnimation)
+  ui.setElementShowing(elementID, true, skipAnimation)
+end
+
+ui.hideElement = function(elementID, skipAnimation)
+  ui.setElementShowing(elementID, false, skipAnimation)
 end
 
 ui._inserts = {}--{ [parent] = {{xml = element, i = insertIndex}}}
@@ -2131,6 +2195,42 @@ ui.insertXml = function(xml, parentID, index)
   if not ui._waitingInsert then ui._waitingInsert = Wait.frames(resolve, 1) end
   ui._inserts[parentID] = ui._inserts[parentID] or {}
   table.insert(ui._inserts[parentID], {xml = xml, i = index})
+end
+
+ui.batchSet = function(uid, deltaTable)
+  ui._batchChanges[uid] = ui._batchChanges[uid] or {}
+  for k,v in pairs(deltaTable) do
+    ui._batchChanges[uid][k] = v
+  end
+
+  local co = coroutine.create(function()
+    while(next(ui._batchChanges)) do
+      while(self.UI.loading) do coroutine.yield(0) end
+      for uid,eachChange in pairs(ui._batchChanges) do
+        --while(self.UI.loading) do coroutine.yield(0) end
+        self.UI.setAttributes(uid, eachChange)
+      end
+      ui._batchChanges = {}
+      coroutine.yield()
+    end
+    ui._batchCo = false
+  end)
+
+  if not ui._batchCo then
+    ui._batchCo = co
+    Coru.run(co)
+  end
+end
+
+ui.onStratDrop = function(obj)
+  if Tac.State ~= Tac.eStates.Turns() then return end
+  local name = obj.getName()
+  if not data.stratCards[name] then return end
+
+  local landingZone = data.stratCards[name].holder()
+  if ui.stratAssignments[name] ~= landingZone then
+    ui.setTurnUI(true)
+  end
 end
 
 ui.setTurnUI = function(enabled)
@@ -2238,56 +2338,20 @@ ui.setTurnUI = function(enabled)
 
   ui.batchSet("Pnl_TurnsTransform", {["offsetXY"] = "0 " .. ((8*ui.settings.turns.yPadding) - runningOffset)/2.0})--Move up to keep centered
   ui.batchSet("Pnl_Turns", {["active"] = true})
-  self.UI.hide("icon_agenda")
-end
-
-ui.onStratDrop = function(obj)
-  if Tac.State ~= Tac.eStates.Turns() then return end
-  local name = obj.getName()
-  if not data.stratCards[name] then return end
-
-  local landingZone = data.stratCards[name].holder()
-  if ui.stratAssignments[name] ~= landingZone then
-    ui.setTurnUI(true)
-  end
-end
-
-ui.batchSet = function(uid, deltaTable)
-  ui._batchChanges[uid] = ui._batchChanges[uid] or {}
-  for k,v in pairs(deltaTable) do
-    ui._batchChanges[uid][k] = v
-  end
-
-  local co = coroutine.create(function()
-    while(next(ui._batchChanges)) do
-      while(self.UI.loading) do coroutine.yield(0) end
-      for uid,eachChange in pairs(ui._batchChanges) do
-        --while(self.UI.loading) do coroutine.yield(0) end
-        self.UI.setAttributes(uid, eachChange)
-      end
-      ui._batchChanges = {}
-      coroutine.yield()
-    end
-    ui._batchCo = false
-  end)
-
-  if not ui._batchCo then
-    ui._batchCo = co
-    Coru.run(co)
-  end
+  ui.hideElement("icon_agenda")
 end
 
 ui.animateHeaderColor = function(toColor, callback)
   local co = coroutine.create(function()
     --self.UI.setAttributes("Header_ProgressMask", {active = true, width = 5})
     ui.batchSet("Header_ProgressMask", {active = true, width = 6, color = toColor})
-    self.UI.show("Header_ProgressMask")
+    ui.showElement("Header_ProgressMask")
     ui.batchSet("Header_GradientTransition", {color = toColor})
     ui.batchSet("Header_DecoTransition", {color = toColor})
-    self.UI.show("Header_GradientTransition")
-    self.UI.show("Header_DecoTransition")
-    self.UI.hide("Header_Deco")
-    self.UI.hide("Header_Gradient")
+    ui.showElement("Header_GradientTransition")
+    ui.showElement("Header_DecoTransition")
+    ui.hideElement("Header_Deco")
+    ui.hideElement("Header_Gradient")
     local p = 0
     local t1 = Time.time
 
@@ -2309,15 +2373,15 @@ ui.setHeaderColor = function(color)
   local toColor = color or ActivePlayer.color
   Tac.color = toColor
 
-  self.UI.hide("Header_ProgressMask")
+  ui.hideElement("Header_ProgressMask")
   ui.batchSet("Header_ColorProgress", {color = toColor})
 
   ui.batchSet("Header_Gradient", {color = toColor, active = true})
   ui.batchSet("Header_Deco", {color = toColor, active = true})
-  self.UI.hide("Header_GradientTransition")
-  self.UI.hide("Header_DecoTransition")
-  self.UI.show("Header_Gradient")
-  self.UI.show("Header_Deco")
+  ui.hideElement("Header_GradientTransition")
+  ui.hideElement("Header_DecoTransition")
+  ui.showElement("Header_Gradient")
+  ui.showElement("Header_Deco")
 end
 
 ui._activeTacStep = false
@@ -2480,12 +2544,12 @@ ui.setInvasionStep = function(params)
   local headerMax = 1815
   local rectMin = 5
 
-  ui.batchSet("Img_FooterFade", {active = true})
+
   if open then
-    self.UI.hide("Img_FooterFade")
+    ui.hideElement("Img_FooterFade")
     Invasion.setActive(true)
   else
-    self.UI.show("Img_FooterFade")
+    ui.showElement("Img_FooterFade")
   end
 
   --Post animation
@@ -2743,7 +2807,7 @@ Tac.openState = function(state, callback, params)
 
   local function openMain()
     ActivePlayer.update("Grey")
-    self.UI.show("icon_agenda")
+    ui.showElement("icon_agenda")
     ui.setSubheaderTxt(ui.eSubTxt.NonActive())
     Tac.setColor({color = "Grey", skipAnimation = params.skipAnimation or params.fastOpen, callback = callback})
   end
@@ -2799,7 +2863,7 @@ Tac.closePreviousState = function(callback, params)
 
   local function closeMain()
     local closeCo = coroutine.create(function()
-      self.UI.hide("icon_agenda")
+      ui.hideElement("icon_agenda")
       local t1 = Time.time
       while Time.time -t1 <= 1.25 do
         coroutine.yield(0)
@@ -2807,7 +2871,7 @@ Tac.closePreviousState = function(callback, params)
       return 1
     end)
     if params.skipAnimation or params.fastClose then
-      self.UI.hide("icon_agenda")
+      ui.hideElement("icon_agenda", true)
       tryCallback()
     else
       Coru.run(closeCo, {callback = callback})
@@ -3404,12 +3468,11 @@ Planets.buildSystem = function(system, callback, skipAnimation)
 
     Planets._nextSystem = false
     PShield.updateUI(skipAnimation)
-    --enable buttons
     tryCallback()
   end
 
   local function onSystemCleared()
-    if not Planets._nextSystem or not Planets._nextSystem.system.planets or #Planets._nextSystem.system.planets <= 0 then
+    if not Planets._nextSystem then
       print("Error clearing system")
       --set/animate orbitals for empty
       tryCallback()
@@ -3420,9 +3483,16 @@ Planets.buildSystem = function(system, callback, skipAnimation)
     Planets._displayedSystem = target
     Planets._nextSystem.building = true
 
-    local numPlanets = #target.planets
-    for i = 1, numPlanets, 1 do
-      Planets.setPlanet(i, target.planets[i], numPlanets, {isHS = target.home})
+    --enable red corners for hazardous systems
+    if Planets._nextSystem.system and Planets._nextSystem.system.anomalies and #Planets._nextSystem.system.anomalies >= 1 then
+      ui.batchSet("Hex_Anamoly", {active = true})
+    end
+
+    if target.planets and #target.planets >= 1 then
+      local numPlanets = #target.planets
+      for i = 1, numPlanets, 1 do
+        Planets.setPlanet(i, target.planets[i], numPlanets, {isHS = target.home})
+      end
     end
 
     --Animate planet entry or skip to complete
@@ -3451,6 +3521,8 @@ Planets._clearBuiltSystem = function(callback, skipAnimation)
   --Clear focus
 
   local function onClearComplete()
+    ui.batchSet("Hex_Anamoly", {active = false})
+
     for i = 1, 5, 1 do --hide planets
       Planets.setPlanet(i)
     end
@@ -3760,9 +3832,8 @@ PShield.updateUI = function(skipAnimation, onlyUpdatePlanet)
 
     --does the shield UI need to be hidden?
     if dataState.visible ~= 0 and (dataState.enabled == 0 or not PShield.visible) then
-      if skipAnimation then ui.batchSet("p"..i.."_shieldShowSkip", {active = false}) end
-      self.UI.hide("p"..i.."_ShieldDisabled")
-      self.UI.hide("p"..i.."_ShieldEnabled")
+      ui.hideElement("p"..i.."_ShieldDisabled", skipAnimation)
+      ui.hideElement("p"..i.."_ShieldEnabled", skipAnimation)
       ui.batchSet("p"..i.."_Btn_shieldOverride", {active = false, interactable = false})
       dataState.visible = 0
       return
@@ -3771,8 +3842,7 @@ PShield.updateUI = function(skipAnimation, onlyUpdatePlanet)
     --Do we need to play the showing animation?
     if dataState.visible == 0 and PShield.visible and dataState.enabled ~= 0 then
       _animatingShields[i] = Coru.wait(0.61, onShieldActivated)
-      ui.batchSet("p"..i.."_shieldShowSkip", {active = true})
-      self.UI.show("p"..i.."_ShieldEnabled")
+      ui.showElement("p"..i.."_ShieldEnabled", skipAnimation)
       return
     end
 
@@ -3794,10 +3864,10 @@ PShield.updateUI = function(skipAnimation, onlyUpdatePlanet)
     end
 
     if dataState.enabled == -1 and dataState.visible == 1 then
-      self.UI.show("p"..i.."_ShieldDisabled")
+      ui.showElement("p"..i.."_ShieldDisabled", skipAnimation)
       dataState.visible = -1
     elseif dataState.enabled == 1 and dataState.visible == -1 then
-      self.UI.hide("p"..i.."_ShieldDisabled")
+      ui.hideElement("p"..i.."_ShieldDisabled", skipAnimation)
       dataState.visible = 1
     end
   end
