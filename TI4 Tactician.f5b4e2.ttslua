@@ -19,7 +19,6 @@ local _unitHelper = getHelperClient('TI4_UNIT_HELPER')
 --Data containers-----------------------------
 local _cmdToken = { --handels the floating command token object/animations
   --*obj = nil, --runtime only
-  --activeColor = color of player that last activated -- runtimeOnly
   guid = false,
   diffuse = "http://cloud-3.steamusercontent.com/ugc/2013722609377867963/0E05B3E0F2109C3779C15989F135C7D55AD0E490/",
   data = {
@@ -42,7 +41,6 @@ local _cmdToken = { --handels the floating command token object/animations
   use_gravity = false,
   dropTokens = {},
 }
-local debugCoroutines = true
 local Coru = {
  _coroutines = {},
  _coRunner = false,
@@ -72,11 +70,13 @@ local Coru = {
     end
  },
 }
-local Tween = {}
-local Animate = {}
-local AnimClip = {}
-local ToggleButton = {}
-local MultiRoller = {} --logic responible for responding to roll requests
+local Animate = {} --Group and run animation clips
+local AnimClip = {} --individual OBJECT anamations
+local uiClips = {} --ui animations
+local Tween = {} --Tween lib for animation clips
+local XML = {}--converts lua values to/from xml values; see: getColor(),rgbaFromName(),rgbaFromTable()
+local ToggleButton = {} --old custom button wrapper for fancier toggleButton sprites; here be dragons
+local MultiRoller = {} --logic responible for handling roll requests
 local Invasion = {} --Handles the more complex invasion UI
 local Plasma = { enabled = false, visible = false, target = false, offset = "-143 -6.2", focusOffset = ""..-382/2.3.." "..334/2.3, focusScale = "0.6 0.6 1"}
 local PShield = {enabled = false, visible = false, status = {}}
@@ -137,7 +137,7 @@ local Planets = { --Handles the planet UI, closely connected to Invasion
   _displayedSystem = false
 }
 
---The core logic/state machine for the Tactician
+--The core logic and state machine for the Tactician
 local Tac = {
   disableAnimations = false,
   rollForMe = {["White"] = true, ["Pink"] = true, ["Red"] = true, ["Blue"] = true, ["Green"] = true, ["Yellow"] = true, ["Orange"] = true, ["Purple"] = true, ["Grey"] = false, ["Black"] = false, ["Teal"] = false, ["Brown"] = true},
@@ -171,13 +171,14 @@ local Tac = {
 }
 
 --Data table passed to unit modifiers
-local TacData = {
-  --activePlayer = "color",
-  --activeSystem = {hex = activeHex, system = system},
-  --adjacentSystems
-  --unitMap
-  --hexToUnits
-  --initialized
+local TacData = {--[[
+  activeColor = ""
+  activeSystem = {hex = "hex", system = systemTable, guid = system.guid},
+  adjacentSystems = {} [perColor] = {["systemGuid1"] = {hex = "hexPosition", system = systemTableRef}, ["g2"] =...}
+  adjacentSystems
+  unitMap = {}--see MultiRoller.buildUnitMap for details
+  hexToUnits
+  initialized = bool--]]
 }
 
 --FINAL_WARNING!! [ctrl] + [k] + [1] to collapse tables or suffer scrolling through xml tables!
@@ -594,10 +595,7 @@ local ui = {
               height = 380,
               offsetXY = "4 36",
               rectAlignment = "LowerLeft",
-
               active = false,
-              animationDuration = 0.25,
-              hideAnimation = "FadeOut",
             }
           },
           {--Subheader
@@ -620,10 +618,8 @@ local ui = {
             attributes = {
               id = "Header_Gradient",
               image = "Header_Gradient",
-              color = "Gray",
+              color = "Grey",
               position = "0 0 -0.05",
-              hideAnimation = "FadeOut",
-              animationDuration = 2,
             }
           },
           {--Gradient ColorTransition
@@ -631,11 +627,8 @@ local ui = {
             attributes = {
               id = "Header_GradientTransition",
               image = "Header_Gradient",
-              color = "Gray",
-              position = "0 0 -0.05",
-              showAnimation = "FadeIn",
-              showAnimationDelay = 1.5,
-              animationDuration = 1.5,
+              color = "Grey",
+              position = "0 0 -0.05"
             }
           },
           {--Deco Lines
@@ -643,10 +636,8 @@ local ui = {
             attributes = {
               id = "Header_Deco",
               image = "Header_Deco",
-              color = "Gray",
+              color = "Grey",
               position = "0 0 -0.06",
-              hideAnimation = "FadeOut",
-              animationDuration = 2,
             }
           },
           {--Deco Lines Transition
@@ -654,11 +645,8 @@ local ui = {
             attributes = {
               id = "Header_DecoTransition",
               image = "Header_Deco",
-              color = "Gray",
+              color = "Grey",
               position = "0 0 -0.06",
-              showAnimation = "FadeIn",
-              showAnimationDelay = 1.5,
-              animationDuration = 1.5,
             }
           },
           { --HeaderTxt
@@ -1147,10 +1135,6 @@ local ui = {
           image = "FooterFade",
           preserveAspect = true,
           rectAlignment = "LowerCenter",
-          showAnimation = "FadeIn",
-          hideAnimation = "FadeOut",
-          showAnimationDelay = 0.2,
-          animationDuration = 0.4
         },
         children = {
           {--GhostMask
@@ -1286,9 +1270,6 @@ local ui = {
           image = "Icon_Agenda",
           offsetXY = "0 -310",
           preserveAspect = true,
-          showAnimation = "FadeIn",
-          hideAnimation = "FadeOut",
-          animationDuration = 1.25
         }
       },
     }
@@ -1304,8 +1285,7 @@ local ui = {
   },
 
   --Used to work around TTS's anoying ui.show/hide and ui.active interation
-  --Elements with a show/hide have their duration adjusted if animations are disabled to mimic setActive
-  _showData = {},--{[btnID] = {duration, currentDuration}}
+  _showData = {},--{[btnID] = {}}
 
   stratAssignments = {},
   _batchChanges = {},
@@ -1499,13 +1479,37 @@ local xmlIndex = {turns = 8, move = 3, SpC = 4, Inv = 5, InvLabel = 7, planets =
 ui.generateXML = function(callback)
   ui.onXmlInjected = callback
 
-  --regiset show/hide animations
-  ui.registerShow("icon_agenda", 1.25)
-  ui.registerShow("Header_Gradient", 2)
-  ui.registerShow("Header_GradientTransition", 1.5)
-  ui.registerShow("Header_Deco", 2)
-  ui.registerShow("Header_DecoTransition", 1.5)
-  ui.registerShow("Img_FooterFade", 0.4)
+  --register show/hide animations
+  ui.newShow("icon_agenda", {
+    show = {
+      params = {duration = 1.25},
+      clip = uiClips.fadeIn,
+      onStop = uiClips.revertFade
+    },
+    hide = {
+      params = {duration = 1.25},
+      clip = uiClips.fadeOut,
+      onStop = uiClips.revertFade
+    }
+  })
+  ui.newShow("Header_Gradient", {hide = {params = {duration = 2}, clip = uiClips.fadeOut, onStop = uiClips.revertFade}})
+  ui.newShow("Header_GradientTransition", {show = {clip = uiClips.fadeIn, delay = 1.5, params = {duration = 1.5}, onStop = uiClips.revertFade}})
+  ui.newShow("Header_Deco", {hide = {clip = uiClips.fadeOut, params = {duration = 2}, onStop = uiClips.revertFade}})
+  ui.newShow("Header_DecoTransition", {show = {clip = uiClips.fadeIn, delay = 1.5, params = {duration = 1.5}, onStop = uiClips.revertFade}})
+  ui.newShow("Header_ProgressMask", {active = false, hide = {uiClips.fadeOut, params = {duration = 0.25}, onStop = uiClips.revertFade}})
+  ui.newShow("Img_FooterFade", {
+    show = {
+      clip = uiClips.fadeIn,
+      delay = 0.2,
+      params = {duration = 0.4},
+      onStop = uiClips.revertFade
+    },
+    hide = {
+      clip = uiClips.fadeOut,
+      params = {duration = 0.4},
+      onStop = uiClips.revertFade
+    },
+  })
 
   local function turnUI()
     --Turn buttons
@@ -1704,13 +1708,13 @@ ui.generateXML = function(callback)
       local  smarty = {
         tag = "Button",
         attributes = {
-          active = false,
           id = each.id,
+          active = false,
           transition = "SpriteSwap",
           image = smartSett.image[role].main,
           highlightedSprite = smartSett.image[role].hover,
           pressedSprite = smartSett.image[role].press,
-          --icon = smartSett.icon[role].icon,
+
           rectAlignment = each.attacker and "MiddleLeft" or "MiddleRight",
           width = smartSett.width,
           offsetXY = ""..(smartSett.offset * (each.attacker and -1 or 1)) .. " 0",
@@ -1732,6 +1736,21 @@ ui.generateXML = function(callback)
           }
         }
       }
+      ui.newShow(each.id, {
+        active = false,
+        isButton = true,
+        show = {
+          clip = each.attacker and uiClips.slideIn_Right or uiClips.slideIn_Left,
+          delay = 0.65,
+          params = {duration = 0.55, from = {x = smartSett.offset * (each.attacker and -1 or 1), y = 0}},
+          onStop = uiClips.revertSlide --original position is not 0,0 so must include .from in params to reset image to the correct position
+        },
+        hide = {
+          clip = each.attacker and uiClips.slideOut_Right or uiClips.slideOut_Left,
+          params = {duration = 0.15, from = {x = smartSett.offset * (each.attacker and -1 or 1), y = 0}},
+          onStop = uiClips.revertSlide
+        }
+      })
       sBtns[each.parent] = sBtns[each.parent] or {}
       table.insert(sBtns[each.parent], smarty)
       ui.btnLookup[each.id] = {smart = each.attacker and "attacker" or "defender", rollTarget = each.target}
@@ -1744,7 +1763,6 @@ ui.generateXML = function(callback)
           id = each.id .. "_Outline",
           width = each.width + 24,
           height = 242,--"218" + 24(outline),
-          offsetXY = "0 " .. each.yOff,
           colors = "#b0b0b0|#d1d0d0|White|White",
           active = false
         },
@@ -1775,14 +1793,25 @@ ui.generateXML = function(callback)
           }
         }--
       }
+      local root = {
+        tag = "Panel",
+        attributes = {
+          id = each.id .. "_Root",
+          width = each.width + 24,
+          height = 242,--"218" + 24(outline),
+          offsetXY = "0 " .. each.yOff,
+          interactable = false,
+        },
+        children = {new},
+      }
       if sBtns[each.id] then --Attach smart buttons
-        for _, each in ipairs(sBtns[each.id]) do
-          table.insert(new.children, each)
+        for _, eachSmarty in ipairs(sBtns[each.id]) do
+          table.insert(root.children,1, eachSmarty)
         end
       end
 
       ui.btnLookup[each.id] = {rollTarget = each.target}
-      ui.insertXml(new, each.parent)
+      ui.insertXml(root, each.parent)
     end
   end
   rollBtns()
@@ -1951,9 +1980,6 @@ ui.generateXML = function(callback)
                     attributes = {
                       id = _id.."_ShieldEnabled",
                       image = "PlanetaryShield_Enabled",
-                      showAnimation = "Grow",
-                      hideAnimation = "FadeOut",
-                      animationDuration = 0.6,
                       raycastTarget = false,
                       active = false
                     }
@@ -1963,9 +1989,6 @@ ui.generateXML = function(callback)
                     attributes = {
                       id = _id.."_ShieldDisabled",
                       image = "PlanetaryShield_Disabled",
-                      showAnimation = "FadeIn",
-                      hideAnimation = "FadeOut",
-                      animationDuration = 0.4,
                       raycastTarget = false,
                       active = false
                     }
@@ -2084,6 +2107,32 @@ ui.generateXML = function(callback)
           }
         }
       }
+      ui.newShow(_id.."_ShieldEnabled", {
+        active = false,
+        show = {
+          clip = uiClips.grow,
+          params = {duration = 0.6},
+          onStop = uiClips.revertScale
+        },
+        hide = {
+          clip = uiClips.fadeOut,
+          params = {duration = 0.6},
+          onStop = uiClips.revertFade
+        }
+      })
+      ui.newShow(_id.."_ShieldDisabled", {
+        active = false,
+        show = {
+          clip = uiClips.fadeIn,
+          params = {duration = 0.4},
+          onStop = uiClips.revertFade
+        },
+        hide = {
+          clip = uiClips.fadeOut,
+          params = {duration = 0.4},
+          onStop = uiClips.revertFade
+        }
+      })
       ui.insertXml(planet, "Pnl_InvasionHex_Lower")
       PShield.status[i] = {enabled = 0, override = 0, visible = 0, hasShield = false}
     end
@@ -2091,67 +2140,162 @@ ui.generateXML = function(callback)
   planets()
 end
 
-local _elementsToHideOnInit = {}--array of elementIDs
-ui.hideOnInit = function()
-  for i = 1, 5, 1 do
-    local _id = "p"..i
-    self.UI.show(_id.."_ShieldEnabled")
-    self.UI.hide(_id.."_ShieldDisabled")
-  end
-
-  local count = #_elementsToHideOnInit
-  for i = 1, count do
-    self.UI.hide(_elementsToHideOnInit[i])
-  end
-end
-
-ui.registerShow_XML = function(elementXML, hideOnInit)
-  ui._showData[elementXML.id] = {
-    duration = elementXML.animationDuration,
-    currentDuration = elementXML.animationDuration
-  }
-  if hideOnInit then table.insert(_elementsToHideOnInit, elementXML.id) end
-end
-
-ui.registerShow = function(elementID, duration, hideOnInit)
-  ui._showData[elementID] = {
-    duration = duration,
-    currentDuration = duration
-  }
-  if hideOnInit then table.insert(_elementsToHideOnInit, elementID) end
-end
-
-ui.setElementShowing = function(elementID, toState, skipAnimation)
-  --Simply use set active for elements without a show/hide animation
-  if not ui._showData[elementID] then ui.batchSet(elementID, {acitve = toState}) return end
-  --else
+--optional params = {show, hide, active, isButton}
+      --params.show/hide = {clip = coroutine(uiClip.someClip), delay = #(time), params = table(passed to clip), onStop = function(revert changes to initial state)}
+ui.newShow = function(elementID, params)
+  params = params or {}
+  params.show = params.show or {}
+  params.hide = params.hide or {}
+  ui._showData[elementID] = ui._showData[elementID] or {isAnimating = 0, inDelay = false, isButton = params.isButton, showState = params.active == nil and true or params.active}
   local data = ui._showData[elementID]
-  skipAnimation = Tac.disableAnimations or skipAnimation
-  if skipAnimation then --set thge animationDuration to 0 to mimic setActive
-    if data.currentDuration ~= 0 then
-      data.currentDuration = 0
-      self.UI.setAttribute(elementID, "animationDuration", 0)
+
+  data.showDelay = params.show.delay or false
+  data.showClip = params.show.clip or false
+  data.show = function(id, callback, showParams)
+    local function animateShow(completionCode)
+      data.inDelay = false
+      if completionCode == -1 then return end --coroutine/show was cancelled
+      if ui._showData[id].showClip then
+        local co = ui._showData[id].showClip(id, showParams)
+        ui._showData[id].runningAnimation = co
+        Coru.run(co, {callback = callback})
+      else
+        ui.batchSet(id, {active = true})
+      end
     end
-  else
-    if data.currentDuration ~= data.duration then
-      data.currentDuration = data.duration
-      self.UI.setAttribute(elementID, "animationDuration", data.duration)
+
+    data.showState = true
+    if data.showDelay then
+      data.inDelay = true
+      data.isAnimating = 1
+      data.runningAnimation = Coru.wait(data.showDelay, animateShow)
+    else
+      animateShow()
+    end
+  end
+  data.onStopShow = params.show.onStop or false
+  data.stopShow = function(id, stopParams)
+    if data.runningAnimation then
+      Coru.stop(data.runningAnimation)
+    end
+
+    --onStopShow should undo any changes to the ui done by the show coroutine (like resetting opacity)
+    if not data.inDelay and data.onStopShow then --If the show never made it out of the delay, there is nothing to undo
+      data.onStopShow(id, stopParams)
+    end
+
+    data.inDelay = false
+    data.isAnimating = 0
+    self.UI.setAttribute(id, "active", false)
+  end
+
+  data.hideDelay = params.hide.delay or false
+  data.hideClip = params.hide.clip or false
+  data.hide = function(id, callback, hideParams)
+    local function animateHide(completionCode)
+      data.inDelay = false
+      if completionCode == -1 then return end
+      if ui._showData[id].hideClip then
+        local co = ui._showData[id].hideClip(id, hideParams)
+        ui._showData[id].runningAnimation = co
+        Coru.run(co, {callback = callback})
+      else
+        ui.batchSet(id, {active = false})
+      end
+    end
+
+    data.showState = false
+    if data.hideDelay then
+      data.inDelay = true
+      data.isAnimating = -1
+      data.runningAnimation = Coru.wait(data.hideDelay, animateHide)
+    else
+      animateHide()
+    end
+  end
+  data.onStopHide = params.hide.onStop or false
+  data.stopHide = function(id, stopParams)
+    if data.runningAnimation then
+      Coru.stop(data.runningAnimation)
+    end
+
+    if not data.inDelay and data.onStopHide then
+      data.onStopHide(id, stopParams)
+    end
+
+    data.inDelay = false
+    data.isAnimating = 0
+    self.UI.setAttribute(id, "active", true)
+  end
+
+  data.showParams = params.show.params or {}
+  data.hideParams = params.hide.params or {}
+end
+
+ui.show = function(elementID, callback, overrides)
+  ui.setShowing(elementID, true, callback, overrides)
+end
+
+ui.hide = function(elementID, callback, overrides)
+  ui.setShowing(elementID, false, callback, overrides)
+end
+
+ui.setShowing = function(elementID, toState, callback, overrides)
+  --print("\nsetShowing: ", elementID, " -> ", toState)
+  if not ui._showData[elementID] then
+    ui.batchSet(elementID, {active = toState})
+    if callback then callback() end
+    return
+  end
+
+  overrides = overrides or {}
+  local animData = ui._showData[elementID]
+  if animData.showState == toState then return end --don't replay animations
+  local passParams = toState and (animData.showParams or {}) or animData.hideParams or {}
+
+  if animData.isAnimating ~= 0 then --If the element is currently animating, stop that animation
+    --print("Stopping animation...", animData.isAnimating)
+    local stop = animData.isAnimating == 1 and animData.stopShow or animData.stopHide
+    stop(elementID, passParams)
+  end
+
+  if Tac.disableAnimations or overrides.skipAnimation or (toState and not animData.show) or (not toState and not animData.hide) then
+    animData.showState = toState
+    animData.isAnimating = 0
+    ui.batchSet(elementID, {active = toState})
+    if callback then callback() end
+    return
+  end
+
+  if next(overrides) then
+    passParams = copyTable(passParams)
+    for k,v in ipairs(overrides) do
+      passParams[k] = v
     end
   end
 
+  animData.showState = toState
   if toState then
-    self.UI.show(elementID)
+    --print("Showing ", elementID,"...")
+    animData.isAnimating = 1
+    local function onComplete(stopCode)
+      animData.isAnimating = 0
+      if stopCode == -1 then return end --was the animation cancelled?
+      if animData.isButton then ui.batchSet(elementID, {interactable = true}) end
+      if callback then callback() end
+    end
+    animData.show(elementID, onComplete, passParams)
   else
-    self.UI.hide(elementID)
+    --print("Hiding ", elementID,"...")
+    animData.isAnimating = -1
+    local function onComplete(stopCode)
+      animData.isAnimating = 0
+      if stopCode == -1 then return end --was the animation cancelled?
+      if animData.isButton then ui.batchSet(elementID, {active = false, interactable = false}) end
+      if callback then callback() end
+    end
+    animData.hide(elementID, onComplete, passParams)
   end
-end
-
-ui.showElement = function(elementID, skipAnimation)
-  ui.setElementShowing(elementID, true, skipAnimation)
-end
-
-ui.hideElement = function(elementID, skipAnimation)
-  ui.setElementShowing(elementID, false, skipAnimation)
 end
 
 ui._inserts = {}--{ [parent] = {{xml = element, i = insertIndex}}}
@@ -2203,22 +2347,24 @@ ui.batchSet = function(uid, deltaTable)
     ui._batchChanges[uid][k] = v
   end
 
-  local co = coroutine.create(function()
-    while(next(ui._batchChanges)) do
-      while(self.UI.loading) do coroutine.yield(0) end
-      for uid,eachChange in pairs(ui._batchChanges) do
-        --while(self.UI.loading) do coroutine.yield(0) end
-        self.UI.setAttributes(uid, eachChange)
-      end
-      ui._batchChanges = {}
-      coroutine.yield()
-    end
-    ui._batchCo = false
-  end)
-
   if not ui._batchCo then
-    ui._batchCo = co
-    Coru.run(co)
+    ui._batchCo = coroutine.create(function()
+      local extraFrames = 0
+      while(next(ui._batchChanges) or extraFrames <= 5) do --keep the coroutine alive for a few frames after the current batch is completed
+        extraFrames = extraFrames + 1
+        if(next(ui._batchChanges)) then
+          while(self.UI.loading) do coroutine.yield(0) end
+          for uid,changeTable in pairs(ui._batchChanges) do
+            self.UI.setAttributes(uid, changeTable)
+          end
+          ui._batchChanges = {}
+          extraFrames = 0 --reset delay
+        end
+        coroutine.yield(0)
+      end
+      ui._batchCo = false
+    end)
+    Coru.run(ui._batchCo)
   end
 end
 
@@ -2338,20 +2484,20 @@ ui.setTurnUI = function(enabled)
 
   ui.batchSet("Pnl_TurnsTransform", {["offsetXY"] = "0 " .. ((8*ui.settings.turns.yPadding) - runningOffset)/2.0})--Move up to keep centered
   ui.batchSet("Pnl_Turns", {["active"] = true})
-  ui.hideElement("icon_agenda")
+  ui.hide("icon_agenda")
 end
 
 ui.animateHeaderColor = function(toColor, callback)
   local co = coroutine.create(function()
     --self.UI.setAttributes("Header_ProgressMask", {active = true, width = 5})
     ui.batchSet("Header_ProgressMask", {active = true, width = 6, color = toColor})
-    ui.showElement("Header_ProgressMask")
+    ui.show("Header_ProgressMask")
     ui.batchSet("Header_GradientTransition", {color = toColor})
     ui.batchSet("Header_DecoTransition", {color = toColor})
-    ui.showElement("Header_GradientTransition")
-    ui.showElement("Header_DecoTransition")
-    ui.hideElement("Header_Deco")
-    ui.hideElement("Header_Gradient")
+    ui.show("Header_GradientTransition")
+    ui.show("Header_DecoTransition")
+    ui.hide("Header_Deco")
+    ui.hide("Header_Gradient")
     local p = 0
     local t1 = Time.time
 
@@ -2373,15 +2519,15 @@ ui.setHeaderColor = function(color)
   local toColor = color or ActivePlayer.color
   Tac.color = toColor
 
-  ui.hideElement("Header_ProgressMask")
+  ui.hide("Header_ProgressMask")
   ui.batchSet("Header_ColorProgress", {color = toColor})
 
   ui.batchSet("Header_Gradient", {color = toColor, active = true})
   ui.batchSet("Header_Deco", {color = toColor, active = true})
-  ui.hideElement("Header_GradientTransition")
-  ui.hideElement("Header_DecoTransition")
-  ui.showElement("Header_Gradient")
-  ui.showElement("Header_Deco")
+  ui.hide("Header_GradientTransition")
+  ui.hide("Header_DecoTransition")
+  ui.show("Header_Gradient")
+  ui.show("Header_Deco")
 end
 
 ui._activeTacStep = false
@@ -2405,7 +2551,7 @@ ui.setTacStep = function(stepName, params)
       lower = {"SpaceCombat", "Invasion"},
       labels = {"BtnBounds_SpaceCombatState", "BtnBounds_InvasionState"},
       footer = "Img_MovementFooterCover",
-      --These buttons seem to be clickable while their perent is not active, even tho they are invisible, so manually setting intereactable = false
+      --These buttons seem to be clickable while their parent is not active, even tho they are invisible, so manually setting intereactable = false
       childButtons = {"Btn_ConfirmMovement_Outline", "Btn_ConfirmMovement", "Btn_Roll_SpaceCannonOff", "Btn_Roll_SpaceCannonOff_Outline", "SmartBtn_SpaceCannonOff_Att", "SmartBtn_SpaceCannonOff_Def"}
     },
     ["SpaceCombat"] = {
@@ -2435,98 +2581,111 @@ ui.setTacStep = function(stepName, params)
   end
   local data = assert(switch[stepName])
 
-  --Pre animation
-  -----------------------------------------------------------
-  ui.batchSet(data.panel, {active = true})
-  ToggleButton.setState(ToggleButton.btns[data.stateBtn], open)
-  --turn lowers off
-  for _, each in ipairs(data.lower) do
-    ui.batchSet(switch[each].panel, {active = false})
-  end
-  if open then
-    --enable child buttons
-    for _, each in ipairs(data.childButtons) do
-      ui.batchSet(each, {interactable = true, active = true})
-    end
-  end
-
-  local pos = open and -1120 or 0
-  local coverOffset = 20
-  local labelGap = 280 - 60 --dist + coverOffset
-  local labelOffset = open and labelGap or 0
-
-  --Post animation
-  -----------------------------------------------------------
-  local function onAnimComplete(completeCode)
-    ui._TacStepAnimation = false
-    if completeCode == -1 then return end
-
-    ui.batchSet(data.cover, {offsetXY = "0 " .. (pos + coverOffset), active = true})
-    for _,each in ipairs(data.labels) do
-      ui.batchSet(each, {offsetXY = "0 " .. (pos + labelOffset)})
+  local setDisplay = coroutine.create(function()
+    --Pre animation
+    -----------------------------------------------------------
+    self.UI.setAttribute(data.panel, "active", true)--this needs to happen now, so don't batch
+    coroutine.yield(0) coroutine.yield(0) coroutine.yield(0) --give the ui plenty of time to load before editing its child elements
+    ToggleButton.setState(ToggleButton.btns[data.stateBtn], open)
+    --turn lower panels off
+    for _, each in ipairs(data.lower) do
+      ui.batchSet(switch[each].panel, {active = false})
     end
     --Set childrenButtons interactable/active
-    for eachStep, tbl in pairs(switch) do
-      for _, eachBtn in ipairs(tbl.childButtons) do
-        local bool = open and eachStep == stepName or false
-        ui.batchSet(eachBtn, {interactable = bool, active = bool})
+    if open then --enable child buttons
+      for _, each in ipairs(data.childButtons) do
+        ui.batchSet(each, {interactable = true})
       end
-    end
-    --Set footer
-    ui.batchSet(data.footer, {active = not open})
-
-    --keep all masks on if no step is open
-    if not open then
-      for eachStep,data in pairs(switch) do
-        ui.batchSet(data.panel, {active = true})
+      coroutine.yield(0)
+      for _, each in ipairs(data.childButtons) do
+        ui.show(each, nil, {skipAnimation = params.skipAnimation})
       end
     end
 
-    tryCallback()
-  end
+    local pos = open and -1120 or 0
+    local coverOffset = 20
+    local labelGap = 280 - 60 --dist + coverOffset
+    local labelOffset = open and labelGap or 0
 
-  if params.skipAnimation then
-    onAnimComplete()
-  else
-    --Animate
+    --Post animation
     -----------------------------------------------------------
-    local duration = open and 0.75 or 0.5
-    local t1 = Time.time
-    local delta = 1120
-    local footerSet = false
-    local labelSet = false
-    ui._TacStepAnimation = coroutine.create(function()
-      while Time.time - t1 <= duration do
-        local percent = (Time.time - t1)/duration
-        local next = Tween.lerp(0, delta, Tween.easeOut(percent))
-        next = open and -next or -(delta - next)
-        ui.batchSet(data.cover, {offsetXY ="0 " .. (coverOffset + next)})
+    local function onAnimComplete(completeCode)
+      ui._TacStepAnimation = false
+      if completeCode == -1 then return end
 
-        --Move labels with gap/delay
-        if next + labelGap <= 0 then
-          for _,each in ipairs(data.labels) do
-            ui.batchSet(each, {offsetXY = "0 " .. (next + labelGap)})
-          end
-        elseif not labelSet then
-          --When the labels reach their approximate final position, set it to the real final pos
-          --Fixes image jumping when 'next' changes alot between frames. (frame1_next + gap) = -1 ...--> (frame2_next + gap) = 5 (pixel jump of 6)
-          labelSet = true
-          for _,each in ipairs(data.labels) do
-            ui.batchSet(each, {offsetXY = "0 0"})
-          end
-        end
-
-        if not footerSet and ((open and percent >= 0.7) or (not open and percent >= 0.1)) then
-          footerSet = true
-          ui.batchSet(data.footer, {active = not open})
-        end
-
-        coroutine.yield(percent)
+      ui.batchSet(data.cover, {offsetXY = "0 " .. (pos + coverOffset), active = true})
+      for _,each in ipairs(data.labels) do
+        ui.batchSet(each, {offsetXY = "0 " .. (pos + labelOffset)})
       end
-      return 1
-    end)
-    Coru.run(ui._TacStepAnimation, {callback = onAnimComplete})
-  end
+      for _, each in ipairs(data.childButtons) do
+        ui.batchSet(each, {interactable = open})
+        ui.setShowing(each, open, nil, {skipAnimation = params.skipAnimation})
+      end
+      --Set footer
+      ui.batchSet(data.footer, {active = not open})
+
+      --keep all masks on if no step is open
+      if not open then
+        for eachStep,data in pairs(switch) do
+          ui.batchSet(data.panel, {active = true})
+        end
+      end
+
+      tryCallback()
+    end
+
+    if params.skipAnimation then
+      onAnimComplete()
+    else
+      --Animate
+      -----------------------------------------------------------
+      local duration = open and 0.75 or 0.5
+      local t1 = Time.time
+      local delta = 1120
+      local footerSet = false
+      local labelSet = false
+      ui._TacStepAnimation = coroutine.create(function()
+        if not open then --play hide animations for smart buttons as window closes
+          for _, each in ipairs(data.childButtons) do
+            if ui._showData[each] then --only play hide animations, dont hide other elements
+              ui.hide(each)
+            end
+          end
+        end
+        --open/close window
+        while Time.time - t1 <= duration do
+          local percent = (Time.time - t1)/duration
+          local next = Tween.lerp(0, delta, Tween.easeOut(percent))
+          next = open and -next or -(delta - next)
+          ui.batchSet(data.cover, {offsetXY ="0 " .. (coverOffset + next)})
+
+          --Move labels with gap/delay
+          if next + labelGap <= 0 then
+            for _,each in ipairs(data.labels) do
+              ui.batchSet(each, {offsetXY = "0 " .. (next + labelGap)})
+            end
+          elseif not labelSet then
+            --When the labels reach their approximate final position, set it to the real final pos
+            --Fixes image jumping when 'next' changes alot between frames. (frame1_next + gap) = -1 ...--> (frame2_next + gap) = 5 (pixel jump of 6)
+            labelSet = true
+            for _,each in ipairs(data.labels) do
+              ui.batchSet(each, {offsetXY = "0 0"})
+            end
+          end
+
+          if not footerSet and ((open and percent >= 0.7) or (not open and percent >= 0.1)) then
+            footerSet = true
+            ui.batchSet(data.footer, {active = not open})
+          end
+
+          coroutine.yield(percent)
+        end
+        return 1
+      end)
+      Coru.run(ui._TacStepAnimation, {callback = onAnimComplete})
+    end
+  end)
+  Coru.run(setDisplay)
 end
 
 --dont call directly, child func on setTacStep
@@ -2546,10 +2705,10 @@ ui.setInvasionStep = function(params)
 
 
   if open then
-    ui.hideElement("Img_FooterFade")
+    ui.hide("Img_FooterFade")
     Invasion.setActive(true)
   else
-    ui.showElement("Img_FooterFade")
+    ui.show("Img_FooterFade")
   end
 
   --Post animation
@@ -2773,15 +2932,16 @@ Tac.setState = function(toState, params, callback)
 
   --print("\nSetting state to ", toState, " from ", Tac.State)
   local function onOpenComplete()
+    --print("State change complete\nState|Prev|Transit")
+    --print(Tac.State, "|", Tac.previousState, "|", Tac.inStateTransition)
     if Tac.State == Tac.inStateTransition then
       Tac.inStateTransition = false
       Tac.onStateOpen()
-    else --A request to change state may have been made while opening this state
+    elseif Tac.inStateTransition then --A request to change state may have been made while opening this state
       local quedState = Tac.inStateTransition
       Tac.inStateTransition = false
       Tac.setState(quedState, params)
     end
-    --print("State set to ", Tac.State)
   end
 
   local function onCloseComplete()
@@ -2807,7 +2967,7 @@ Tac.openState = function(state, callback, params)
 
   local function openMain()
     ActivePlayer.update("Grey")
-    ui.showElement("icon_agenda")
+    ui.show("icon_agenda")
     ui.setSubheaderTxt(ui.eSubTxt.NonActive())
     Tac.setColor({color = "Grey", skipAnimation = params.skipAnimation or params.fastOpen, callback = callback})
   end
@@ -2858,12 +3018,12 @@ Tac.closePreviousState = function(callback, params)
   params = params or {}
   params.skipAnimation = params.skipAnimation or Tac.disableAnimations
   local function tryCallback()
-    if callback then callback() end
+    if callback then Wait.frames(callback, 1) end--Coru.waitFrames(1, callback) end
   end
 
   local function closeMain()
     local closeCo = coroutine.create(function()
-      ui.hideElement("icon_agenda")
+      ui.hide("icon_agenda")
       local t1 = Time.time
       while Time.time -t1 <= 1.25 do
         coroutine.yield(0)
@@ -2871,7 +3031,7 @@ Tac.closePreviousState = function(callback, params)
       return 1
     end)
     if params.skipAnimation or params.fastClose then
-      ui.hideElement("icon_agenda", true)
+      ui.hide("icon_agenda", nil, {skipAnimation = true})
       tryCallback()
     else
       Coru.run(closeCo, {callback = callback})
@@ -2884,16 +3044,16 @@ Tac.closePreviousState = function(callback, params)
   end
 
   local function closeInvasion()
-    ui.setTacStep(Tac.eStates.Invasion(),{callback = callback, skipAnimation = params.skipAnimation or params.fastClose, disable = true})
+    ui.setTacStep(Tac.eStates.Invasion(),{callback = tryCallback, skipAnimation = params.skipAnimation or params.fastClose, disable = true})
   end
 
   local function closeSpaceCombat()
-    ui.setTacStep(Tac.eStates.SpaceCombat(),{callback = callback, skipAnimation = params.skipAnimation or params.fastClose, disable = true})
+    ui.setTacStep(Tac.eStates.SpaceCombat(),{callback = tryCallback, skipAnimation = params.skipAnimation or params.fastClose, disable = true})
   end
 
   local function closeMovement()
-    ui.setTacStep(Tac.eStates.Movement(), {callback = callback, skipAnimation = params.skipAnimation or params.fastClose, disable = true})
     _systemHelper.removeSystemHighlights()
+    ui.setTacStep(Tac.eStates.Movement(), {callback = tryCallback, skipAnimation = params.skipAnimation or params.fastClose, disable = true})
   end
 
   local switch = {
@@ -2909,7 +3069,6 @@ Tac.closePreviousState = function(callback, params)
   --print("Closing state >", Tac.previousState, "<")
   local try = switch[Tac.previousState] and Tac.previousState or "catch"
   switch[try]()
-  --switch[Tac.previousState]()
 end
 
 --params {skipAnimation = bool, callback}
@@ -3832,8 +3991,8 @@ PShield.updateUI = function(skipAnimation, onlyUpdatePlanet)
 
     --does the shield UI need to be hidden?
     if dataState.visible ~= 0 and (dataState.enabled == 0 or not PShield.visible) then
-      ui.hideElement("p"..i.."_ShieldDisabled", skipAnimation)
-      ui.hideElement("p"..i.."_ShieldEnabled", skipAnimation)
+      ui.hide("p"..i.."_ShieldDisabled", nil, {skipAnimation = skipAnimation})
+      ui.hide("p"..i.."_ShieldEnabled", nil, {skipAnimation = skipAnimation})
       ui.batchSet("p"..i.."_Btn_shieldOverride", {active = false, interactable = false})
       dataState.visible = 0
       return
@@ -3842,7 +4001,7 @@ PShield.updateUI = function(skipAnimation, onlyUpdatePlanet)
     --Do we need to play the showing animation?
     if dataState.visible == 0 and PShield.visible and dataState.enabled ~= 0 then
       _animatingShields[i] = Coru.wait(0.61, onShieldActivated)
-      ui.showElement("p"..i.."_ShieldEnabled", skipAnimation)
+      ui.show("p"..i.."_ShieldEnabled", nil, {skipAnimation = skipAnimation})
       return
     end
 
@@ -3864,10 +4023,10 @@ PShield.updateUI = function(skipAnimation, onlyUpdatePlanet)
     end
 
     if dataState.enabled == -1 and dataState.visible == 1 then
-      ui.showElement("p"..i.."_ShieldDisabled", skipAnimation)
+      ui.show("p"..i.."_ShieldDisabled", nil, {skipAnimation = skipAnimation})
       dataState.visible = -1
     elseif dataState.enabled == 1 and dataState.visible == -1 then
-      ui.hideElement("p"..i.."_ShieldDisabled", skipAnimation)
+      ui.hide("p"..i.."_ShieldDisabled", nil, {skipAnimation = skipAnimation})
       dataState.visible = 1
     end
   end
@@ -5266,12 +5425,21 @@ end
 
 --global events-----------------------------------------------------------------
 
+local _pingDoOnce = true
 function onPlayerPing(player, position, object)
 
   local function activateSystem()
     local system = _systemHelper.systemFromPosition(position)
     if system then _systemHelper.activateSystem({system = system.guid, color = ActivePlayer.color}) end
   end
+
+  if _pingDoOnce then
+    _pingDoOnce = false
+  end
+
+  --local rgbaVal = "rgba(7.1,1,0.2,1.2)"
+  --local subOpacity, matchCount = string.gsub(rgbaVal, "(%d+%.?%d*)%s*%p%s*(%d+%.?%d*)%s*%p%s*(%d+%.?%d*)%s*%p%s*(%d+%.?%d*)", "%1 %2 %3 a")
+  --print(subOpacity, " #: ", matchCount)
 
   --setSystemHighlighter({color = "Blue", enabled = true})
   --setSystemHighlighter({color = "White", toggle = true})
@@ -5280,7 +5448,6 @@ function onPlayerPing(player, position, object)
 
   Wait.frames(function()
   end, 20)
-
 
   --MultiRoller.buildTacData()
 
@@ -5295,26 +5462,27 @@ end
 
 function onPlayerChangeColor(player_color)
   --print("onColorChange >", player_color, "<")
-  Wait.frames(function() Tac.updateActiveState(nil, {skipAnimation = player_color == Tac.color}) end, 40)
+  Coru.waitFrames(40, function() Tac.updateActiveState(nil, {skipAnimation = player_color == Tac.color}) end)
 end
 
-local _turnChangeWait = false
+local _turnChangeWait = false --{next = color, prev = color}
 function onPlayerTurnStart(activeColor, previousColor)
+  --print("Turn start event >", activeColor, "<")
   local color = activeColor ~= "" and activeColor or "Grey"
   if not Turns.enable then color = "Grey" end
-  --print("Turn start event >", color, "<")
 
   local function resolveChange()
+    Tac.onGameEvent(Tac.eGameEvents.PlayerTurnStart(), {color = _turnChangeWait.next, prev = _turnChangeWait.prev})
     _turnChangeWait = false
-    Tac.onGameEvent(Tac.eGameEvents.PlayerTurnStart(), {color = activeColor, prev = previousColor})
   end
 
-  local waitTime = _turnChangeWait and 65 or 125
   if _turnChangeWait then
-    Wait.stop(_turnChangeWait)
+    _turnChangeWait.next = activeColor
+    return
   end
 
-  _turnChangeWait = Wait.frames(resolveChange, waitTime)
+  _turnChangeWait = {next = activeColor, prev = previousColor}
+  Coru.waitFrames(125, resolveChange)
 end
 
 function onObjectRotate(object, spin, flip, player_color, old_spin, old_flip)
@@ -5403,7 +5571,7 @@ function onLoad(save_state)
       self.addContextMenuItem("Toggle Animations", context_toggleAnimations)
       self.addContextMenuItem('Toggle "Roll For Me"', context_toggleRollForMe)
       self.addContextMenuItem("Look At Me", context_lookAtMe)
-      ui.hideOnInit()
+      self.addContextMenuItem("Reload", context_reload)
     end
 
     local function uploadUI()
@@ -5480,23 +5648,9 @@ function context_setActivePlayer(clickerColor, objPos, obj)
   Player[clickerColor].clearSelectedObjects()
 end
 
-function context_setState(clickerColor, objPos, obj)
-  local options = {}
-  for name,each in pairs(Tac.eStates) do
-    if each() ~= "Initializing" then
-      table.insert(options, name)
-    end
-  end
-  local function onConfirm(selected, selected_index, player_color)
-     Tac.setState(selected, {skipAnimation = true})
-  end
-
-  Player[clickerColor].showOptionsDialog("Select State", options, "Main", onConfirm)
-  Player[clickerColor].clearSelectedObjects()
-end
-
 function context_toggleAnimations(clickerColor, objPos, obj)
   Tac.disableAnimations = not Tac.disableAnimations
+
   local txt = Tac.disableAnimations and "disabled" or "enabled"
   local col = Tac.disableAnimations and "Red" or "Blue"
   pcall(printToAll("Tactician animations " .. txt, col))
@@ -5513,6 +5667,27 @@ end
 function context_lookAtMe(clickerColor, objPos, obj)
   Player[clickerColor].clearSelectedObjects()
   lookAtMe(clickerColor, objPos)
+end
+
+--dev context
+function context_setState(clickerColor, objPos, obj)
+  local options = {}
+  for name,each in pairs(Tac.eStates) do
+    if each() ~= "Initializing" then
+      table.insert(options, name)
+    end
+  end
+  local function onConfirm(selected, selected_index, player_color)
+     Tac.setState(selected, {skipAnimation = true})
+  end
+
+  Player[clickerColor].showOptionsDialog("Select State", options, "Main", onConfirm)
+  Player[clickerColor].clearSelectedObjects()
+end
+
+--dev context
+function context_reload()
+  self.reload()
 end
 
 --Misc functions----------------------------------------------------------------
@@ -5609,7 +5784,6 @@ _cmdToken.setDisplayToken = function(_toColor, skipAnimation, tokenLoadedCallbac
  local factionToken = getFactionToken(_factionHelper.fromColor(toColor))
  local targetDiffuse = factionToken and factionToken.getCustomObject().diffuse or _cmdToken.diffuse
  if not toColor then toColor = "Black" end
- _cmdToken.activeColor = toColor
 
  local activeDiff = _cmdToken.obj.getCustomObject().diffuse
  if activeDiff == targetDiffuse then if tokenLoadedCallback then tokenLoadedCallback() end return end
@@ -5846,6 +6020,82 @@ _cmdToken.animateActivation = function(callback)
   end
 
   _cmdToken.setDisplayToken(ActivePlayer.color, true, play)
+end
+
+--XML utils---------------------------------------------------------------------
+
+--pass an elementID to preserve the current alpha of the color
+XML.rgbaFromName = function(colorName, elementID)
+  local preserveOpacity = 1
+  if elementID then
+    preserveOpacity = XML.getColor(elementId)
+    preserveOpacity = preserveOpacity and preserveOpacity.a or 1
+  end
+  local color = Color.fromString(colorName)
+  local colTable = {color.r, color.g, color.b, preserveOpacity}
+  return "rgba("..table.concat(colTable,",")..")"
+end
+
+--pass an elementID to preserve the current alpha of the color
+XML.rgbaFromTable = function(colorTable, elementID)
+  local preserveOpacity = colorTable.a or 1
+  if elementID then
+    preserveOpacity = XML.getColor(elementId)
+    preserveOpacity = preserveOpacity and preserveOpacity.a or 1
+  end
+  local tbl = {colorTable.r, colorTable.g, colorTable.b, preserveOpacity}
+  return "rgba("..table.concat(tbl,",")..")"
+end
+
+--returns: {r = #, g = #, b = #, a = #} or "ColorName"
+XML.getColor = function(elementID, asName)
+  local colorString = self.UI.getAttribute(elementID, "color") or false
+  if not colorString then return end
+
+  if string.find(colorString, "rgba", 1, true) then
+    local rgbaTable = { r = 1, g = 1, b = 1, a = 1}
+    local _rgbaNext = {"r","g","b","a"}
+    local _next = 1
+    for v in string.gmatch(colorString, "(%d+%.?%d*)") do
+      rgbaTable[_rgbaNext[_next]] = tonumber(v)
+      _next = _next + 1
+    end
+    return not asName and rgbaTable or Color(rgbaTable):toString()
+  elseif string.find(colorString, "#", 1, true) then --not using hex colors in ui, so ignoring
+    return nil
+  else --is color name
+    return asName and colorString or Color.fromString(colorString)
+  end
+end
+
+--returns: {x = #, y = #}
+XML.getOffset = function(elementID)
+  local posString = self.UI.getAttribute(elementID, "offsetXY")
+  if not posString then return {x = 0, y = 0} end
+
+  local result = {}
+  local _next = {"x", "y"}
+  local _count = 1
+  for val in string.gmatch(posString, "(%-?%d+%.?%d*)") do
+    result[_next[_count]] = tonumber(val)
+    _count = _count + 1
+  end
+  return result
+end
+
+--returns = {x = #, y = #, z = #}
+XML.getScale = function(elementID)
+  local scaleString = self.UI.getAttribute(elementID, "scale")
+  if not scaleString then return {x = 1, y = 1, z = 1} end
+
+  local result = {}
+  local _next = {"x","y","z"}
+  local _count = 1
+  for val in string.gmatch(scaleString, "(%-?%d+%.?%d*)") do
+    result[_next[_count]] = tonumber(val)
+    _count = _count + 1
+  end
+  return result
 end
 
 --Object animation clips--------------------------------------------------------
@@ -6087,6 +6337,216 @@ Animate.newController = function()
   end
 
   return animation
+end
+
+--uiClips-----------------------------------------------------------------------
+
+--optional params = {from, to , duration, rgbaColor, lerp}
+uiClips.fadeOut = function(elementID, params)
+  params = params or {}
+  local co = coroutine.create(function()
+    local iOpacity = params.from or 1
+    local endOpacity = params.to or 0
+    local duration = params.duration or 0.25 --seconds
+      local _xmlCol = XML.getColor(elementID) or {r = 1, g = 1, b = 1}
+    local color = {_xmlCol.r,_xmlCol.g,_xmlCol.b, iOpacity}--preserve current tint
+    local lerp = params.lerp or Tween.smooth
+    local iTime = Time.time
+
+    while Time.time - iTime <= duration do
+      local percent = (Time.time - iTime)/duration
+      if percent > 1 then percent = 1 end
+      local percentModified = lerp(percent)
+      color[4] = Tween.lerp(iOpacity, endOpacity, percentModified)
+
+      ui.batchSet(elementID, {color = "rgba("..table.concat(color, ",")..")"})
+      coroutine.yield(percent)
+    end
+    --once invisible, setActive false and reset opacity
+    self.UI.setAttribute(elementID, "active", false)
+    coroutine.yield(1)
+    color[4] = iOpacity
+    ui.batchSet(elementID, {color = "rgba("..table.concat(color, ",")..")"})
+    return 1
+  end)
+
+  return co
+end
+
+--optional params = {from, to , duration, rgbaColor, lerp}
+uiClips.fadeIn = function(elementID, params)
+  params = params or {}
+  local co = coroutine.create(function()
+    local iOpacity = params.from or 0
+    local endOpacity = params.to or 1
+    local duration = params.duration or 0.25 --seconds
+      local _xmlCol = XML.getColor(elementID) or {r = 1, g = 1, b = 1}
+    local color = {_xmlCol.r,_xmlCol.g,_xmlCol.b, iOpacity}--preserve current tint
+    local lerp = params.lerp or Tween.smooth
+    local iTime = Time.time
+
+    --initialize the element to starting opacity and make sure its active
+    self.UI.setAttributes(elementID, {active = true, color = "rgba("..table.concat(color, ",")..")"})
+    coroutine.yield(1)
+
+    while Time.time - iTime <= duration do
+      local percent = (Time.time - iTime)/duration
+      if percent > 1 then percent = 1 end
+      local percentModified = lerp(percent)
+      color[4] = Tween.lerp(iOpacity, endOpacity, percentModified)
+
+      ui.batchSet(elementID, {color = "rgba("..table.concat(color, ",")..")"})
+      coroutine.yield(percent)
+    end
+    return 1
+  end)
+
+  return co
+end
+
+uiClips.revertFade = function(elementID, params)
+  local colorTable = XML.getColor(elementID) or {r = 1, g = 1, b = 1, a = 1}
+  colorTable.a = params and params.from or 1
+  ui.batchSet(elementID, {color = XML.rgbaFromTable(colorTable)})
+end
+
+--Scale------
+uiClips.grow = function(elementID, params)
+  return uiClips.scale(elementID, true, params)
+end
+
+uiClips.shrink = function(elementID, params)
+  return uiClips.scale(elementID, false, params)
+end
+
+uiClips.scale = function(elementID, scaleUp, params)
+  params = params or {}
+  local co = coroutine.create(function()
+    local t1 = Time.time
+    local duration = params.duration or 0.25
+    local lerp = params.lerp or Tween.smooth
+
+    local originScale = params.from or XML.getScale(elementID)--{x = #, y = #, z = #}
+    local effectMagnitude = params.to or {x = 0.01, y = 0.01, z = 1}
+    local iScale = {x = scaleUp and effectMagnitude.x or originScale.x, y = scaleUp and effectMagnitude.y or originScale.y, z = 1}
+    local endScale = {x = scaleUp and originScale.x or effectMagnitude.x, y = scaleUp and originScale.y or effectMagnitude.y, z = 1}
+
+    self.UI.setAttributes(elementID, {active = true, scale = iScale.x.." "..iScale.y.." "..iScale.z})
+    coroutine.yield(0)
+    while Time.time - t1 < duration do
+      local percent = (Time.time - t1)/duration
+      local modifiedPercent = lerp(percent)
+      local x = Tween.lerp(iScale.x, endScale.x, modifiedPercent)
+      local y = Tween.lerp(iScale.y, endScale.y, modifiedPercent)
+
+      ui.batchSet(elementID, {scale = x.." "..y.." 1"})
+      coroutine.yield(percent)
+    end
+    if not scaleUp then
+      self.UI.setAttribute(elementID, "active", false)
+      coroutine.yield(1)
+    end
+    ui.batchSet(elementID, {scale = endScale.x.." "..endScale.y.." 1"})
+    return 1
+  end)
+  return co
+end
+
+uiClips.revertScale = function(elementID, params)
+  local _scale = params.from or {x = 1, y = 1, z = 1}
+  ui.batchSet(elementID, {scale = _scale.x.." ".._scale.y.." 1"})
+end
+
+--Slides------
+uiClips.slideIn_Left = function(elementID, params)
+  return uiClips.slide(elementID, "LEFT", true, params)
+end
+
+uiClips.slideIn_Right = function(elementID, params)
+  return uiClips.slide(elementID, "RIGHT", true, params)
+end
+
+uiClips.slideIn_Up = function(elementID, params)
+  return uiClips.slide(elementID, "UP", true, params)
+end
+
+uiClips.slideIn_Down = function(elementID, params)
+  return uiClips.slide(elementID, "DOWN", true, params)
+end
+
+uiClips.slideOut_Left = function(elementID, params)
+  return uiClips.slide(elementID, "LEFT", false, params)
+end
+
+uiClips.slideOut_Right = function(elementID, params)
+  return uiClips.slide(elementID, "RIGHT", false, params)
+end
+
+uiClips.slideOut_Up = function(elementID, params)
+  return uiClips.slide(elementID, "UP", false, params)
+end
+
+uiClips.slideOut_Down = function(elementID, params)
+  return uiClips.slide(elementID, "DOWN", false, params)
+end
+
+--params(defaults) = {duration = 0.25, lerp, padding = 1.2, from = {x = #, y = #}, to = {x = #, y = #}}
+uiClips.slide = function(elementID, dir, slideIn, params)
+  params = params or {}
+  local directionToMod = { ["LEFT"] = {target = "x", dir = -1}, ["RIGHT"] = {target = "x", dir = 1}, ["UP"] = {target = "y", dir = -1}, ["DOWN"] = {target = "y", dir = 1}}
+  local eDirections = {
+    ["Left"] = "LEFT", ["left"] = "LEFT", [4] = "LEFT", ["a"] = "LEFT", ["LEFT"] = "LEFT",
+    ["Right"] = "RIGHT", ["right"] = "RIGHT", ["RIGHT"] = "RIGHT", [6] = "RIGHT", ["d"] = "RIGHT",
+    ["Up"] = "UP", ["up"] = "UP", ["UP"] = "UP", [8] = "UP", ["w"] = "UP",
+    ["Down"] = "DOWN", ["down"] = "DOWN", ["DOWN"] = "DOWN", [2] = "DOWN", ["s"] = "DOWN",
+  }
+
+  local dirMod = assert(directionToMod[eDirections[dir]].dir) -- 1 or -1
+  local targetDimention = directionToMod[eDirections[dir]].target --"x"or"y"
+
+  local co = coroutine.create(function()
+    local restingPos = params.from or XML.getOffset(elementID) --{x = #, y = #}
+
+    local function getSlidePos()
+      local dim = tonumber(self.UI.getAttribute(elementID, targetDimention == "x" and "width" or "height") or 100)
+      dim = dim*(params.padding or 1.2)
+      dim = restingPos[targetDimention] + (dim*dirMod)
+      return {x = targetDimention == "x" and dim or restingPos.x, y = targetDimention == "y" and dim or restingPos.y}
+    end
+    local slidePos = params.to or getSlidePos()--{x = #, y = #} --where is the element when it is fully displaced by the slide effect
+
+    local t1 = Time.time
+    local duration = params.duration or 0.25
+    local lerp = params.lerp or Tween.smooth
+    local iPos = slideIn and slidePos or restingPos
+    local endPos = slideIn and restingPos or slidePos
+
+    self.UI.setAttributes(elementID, { active = true, offsetXY = iPos.x.." "..iPos.y })
+    while Time.time - t1 < duration do
+      local percent = (Time.time - t1)/duration
+      local modifiedPercent = lerp(percent)
+      local lerpedVal = Tween.lerp(iPos[targetDimention], endPos[targetDimention], modifiedPercent)
+
+      local stringVal = (targetDimention == "x" and lerpedVal or iPos.x).." "..(targetDimention == "y" and lerpedVal or iPos.y)
+      ui.batchSet(elementID, {offsetXY = stringVal})
+      coroutine.yield(percent)
+    end
+
+    if not slideIn then
+      self.UI.setAttribute(elementID, "active", false)
+      coroutine.yield(1)
+    end
+    ui.batchSet(elementID, {offsetXY = restingPos.x .." ".. restingPos.y})
+
+    return 1
+  end)
+
+  return co
+end
+
+uiClips.revertSlide = function(elementID, params)
+  local originalPos = params and params.from or {x = 0, y = 0}
+  ui.batchSet(elementID, {offsetXY = originalPos.x .." ".. originalPos.y})
 end
 
 --------------------------------------------------------------------------------
