@@ -1493,9 +1493,9 @@ ui.generateXML = function(callback)
     }
   })
   ui.newShow("Header_Gradient", {hide = {params = {duration = 2}, clip = uiClips.fadeOut, onStop = uiClips.revertFade}})
-  ui.newShow("Header_GradientTransition", {show = {clip = uiClips.fadeIn, delay = 1.5, params = {duration = 1.5}, onStop = uiClips.revertFade}})
   ui.newShow("Header_Deco", {hide = {clip = uiClips.fadeOut, params = {duration = 2}, onStop = uiClips.revertFade}})
-  ui.newShow("Header_DecoTransition", {show = {clip = uiClips.fadeIn, delay = 1.5, params = {duration = 1.5}, onStop = uiClips.revertFade}})
+  ui.newShow("Header_GradientTransition", {show = {clip = uiClips.fadeIn, delay = 1.5, params = {duration = 1.45}, onStop = uiClips.revertFade}})
+  ui.newShow("Header_DecoTransition", {show = {clip = uiClips.fadeIn, delay = 1.5, params = {duration = 1.45}, onStop = uiClips.revertFade}})
   ui.newShow("Header_ProgressMask", {active = false, hide = {uiClips.fadeOut, params = {duration = 0.25}, onStop = uiClips.revertFade}})
   ui.newShow("Img_FooterFade", {
     show = {
@@ -2146,85 +2146,96 @@ ui.newShow = function(elementID, params)
   params = params or {}
   params.show = params.show or {}
   params.hide = params.hide or {}
-  ui._showData[elementID] = ui._showData[elementID] or {isAnimating = 0, inDelay = false, isButton = params.isButton, showState = params.active == nil and true or params.active}
+  ui._showData[elementID] = ui._showData[elementID] or
+    {
+      isAnimating = 0,
+      inDelay = false,
+      isButton = params.isButton,
+      showState = params.active == nil and true or params.active
+    }
   local data = ui._showData[elementID]
 
   data.showDelay = params.show.delay or false
   data.showClip = params.show.clip or false
   data.show = function(id, callback, showParams)
+    local _data = ui._showData[id]
     local function animateShow(completionCode)
-      data.inDelay = false
+      _data.inDelay = false
       if completionCode == -1 then return end --coroutine/show was cancelled
-      if ui._showData[id].showClip then
-        local co = ui._showData[id].showClip(id, showParams)
-        ui._showData[id].runningAnimation = co
+      if _data.showClip then
+        local co = _data.showClip(id, showParams)
+        _data.runningAnimation = co
         Coru.run(co, {callback = callback})
       else
         ui.batchSet(id, {active = true})
+        if callback then callback() end
       end
     end
-
-    data.showState = true
-    if data.showDelay then
-      data.inDelay = true
-      data.isAnimating = 1
-      data.runningAnimation = Coru.wait(data.showDelay, animateShow)
+    _data.showState = true
+    if _data.showDelay then
+      _data.inDelay = true
+      _data.isAnimating = 1
+      _data.runningAnimation = Coru.wait(_data.showDelay, animateShow)
     else
       animateShow()
     end
   end
   data.onStopShow = params.show.onStop or false
   data.stopShow = function(id, stopParams)
-    if data.runningAnimation then
-      Coru.stop(data.runningAnimation)
+    local _data = ui._showData[id]
+    if _data.runningAnimation then
+      Coru.stop(_data.runningAnimation)
     end
 
     --onStopShow should undo any changes to the ui done by the show coroutine (like resetting opacity)
-    if not data.inDelay and data.onStopShow then --If the show never made it out of the delay, there is nothing to undo
-      data.onStopShow(id, stopParams)
+    if not _data.inDelay and _data.onStopShow then --If the show never made it out of the delay, there is nothing to undo
+      _data.onStopShow(id, stopParams)
     end
 
-    data.inDelay = false
-    data.isAnimating = 0
+    _data.inDelay = false
+    _data.isAnimating = 0
     self.UI.setAttribute(id, "active", false)
   end
 
   data.hideDelay = params.hide.delay or false
   data.hideClip = params.hide.clip or false
   data.hide = function(id, callback, hideParams)
+    local _data = ui._showData[id]
     local function animateHide(completionCode)
-      data.inDelay = false
+      _data.inDelay = false
       if completionCode == -1 then return end
-      if ui._showData[id].hideClip then
-        local co = ui._showData[id].hideClip(id, hideParams)
-        ui._showData[id].runningAnimation = co
+      if _data.hideClip then
+        local co = _data.hideClip(id, hideParams)
+        _data.runningAnimation = co
         Coru.run(co, {callback = callback})
       else
         ui.batchSet(id, {active = false})
+        if callback then callback() end
       end
     end
 
-    data.showState = false
-    if data.hideDelay then
-      data.inDelay = true
-      data.isAnimating = -1
-      data.runningAnimation = Coru.wait(data.hideDelay, animateHide)
+    _data.showState = false
+    if _data.hideDelay then
+      _data.inDelay = true
+      _data.isAnimating = -1
+      _data.runningAnimation = Coru.wait(_data.hideDelay, animateHide)
     else
       animateHide()
     end
   end
   data.onStopHide = params.hide.onStop or false
   data.stopHide = function(id, stopParams)
-    if data.runningAnimation then
-      Coru.stop(data.runningAnimation)
+    local _data = ui._showData[id]
+    if _data.runningAnimation then
+      Coru.stop(_data.runningAnimation)
     end
 
-    if not data.inDelay and data.onStopHide then
-      data.onStopHide(id, stopParams)
+    if not _data.inDelay and _data.onStopHide then
+      _data.onStopHide(id, stopParams)
     end
 
-    data.inDelay = false
-    data.isAnimating = 0
+    _data.inDelay = false
+    _data.isAnimating = 0
     self.UI.setAttribute(id, "active", true)
   end
 
@@ -2232,17 +2243,18 @@ ui.newShow = function(elementID, params)
   data.hideParams = params.hide.params or {}
 end
 
-ui.show = function(elementID, callback, overrides)
-  ui.setShowing(elementID, true, callback, overrides)
+ui.show = function(elementID, skipAnimation, callback, overrides)
+  ui.setShowing(elementID, true, skipAnimation, callback, overrides)
 end
 
-ui.hide = function(elementID, callback, overrides)
-  ui.setShowing(elementID, false, callback, overrides)
+ui.hide = function(elementID, skipAnimation, callback, overrides)
+  ui.setShowing(elementID, false, skipAnimation, callback, overrides)
 end
 
-ui.setShowing = function(elementID, toState, callback, overrides)
+ui.setShowing = function(elementID, toState, skipAnimation, callback, overrides)
   --print("\nsetShowing: ", elementID, " -> ", toState)
   if not ui._showData[elementID] then
+    --print("Missing show data for ", elementID)
     ui.batchSet(elementID, {active = toState})
     if callback then callback() end
     return
@@ -2250,16 +2262,19 @@ ui.setShowing = function(elementID, toState, callback, overrides)
 
   overrides = overrides or {}
   local animData = ui._showData[elementID]
-  if animData.showState == toState then return end --don't replay animations
+  if animData.showState == toState then --don't replay animations
+    --print(elementID," is already ", toState and "showing" or "hiding")
+    if callback then callback() end return
+  end
   local passParams = toState and (animData.showParams or {}) or animData.hideParams or {}
 
   if animData.isAnimating ~= 0 then --If the element is currently animating, stop that animation
-    --print("Stopping animation...", animData.isAnimating)
+    --print("Stopping animation: ", elementID, " ", animData.isAnimating)
     local stop = animData.isAnimating == 1 and animData.stopShow or animData.stopHide
     stop(elementID, passParams)
   end
 
-  if Tac.disableAnimations or overrides.skipAnimation or (toState and not animData.show) or (not toState and not animData.hide) then
+  if Tac.disableAnimations or skipAnimation or (toState and not animData.show) or (not toState and not animData.hide) then
     animData.showState = toState
     animData.isAnimating = 0
     ui.batchSet(elementID, {active = toState})
@@ -2490,24 +2505,25 @@ end
 ui.animateHeaderColor = function(toColor, callback)
   local co = coroutine.create(function()
     --self.UI.setAttributes("Header_ProgressMask", {active = true, width = 5})
-    ui.batchSet("Header_ProgressMask", {active = true, width = 6, color = toColor})
+    ui.batchSet("Header_ProgressMask", {width = 6, color = XML.rgbaFromName(toColor)})
+    ui.batchSet("Header_GradientTransition", {active = false, color = XML.rgbaFromName(toColor, "Header_GradientTransition")})
+    ui.batchSet("Header_DecoTransition", {active = false, color = XML.rgbaFromName(toColor, "Header_DecoTransition")})
+    coroutine.yield(0)
     ui.show("Header_ProgressMask")
-    ui.batchSet("Header_GradientTransition", {color = toColor})
-    ui.batchSet("Header_DecoTransition", {color = toColor})
-    ui.show("Header_GradientTransition")
     ui.show("Header_DecoTransition")
+    ui.show("Header_GradientTransition")
     ui.hide("Header_Deco")
     ui.hide("Header_Gradient")
     local p = 0
     local t1 = Time.time
 
     while(p < 1) do
-      p = (Time.time - t1)/3
-      p = p <= 1 and p or 1 --was going over 1 for some reason?
       local val = Tween.easeIn(p) * 2030--296
       ui.batchSet("Header_ProgressMask",{width = val})
       coroutine.yield(p)
+      p = (Time.time - t1)/3
     end
+    coroutine.yield(1)
     ui.setHeaderColor(toColor)
   end)
 
@@ -2520,10 +2536,9 @@ ui.setHeaderColor = function(color)
   Tac.color = toColor
 
   ui.hide("Header_ProgressMask")
-  ui.batchSet("Header_ColorProgress", {color = toColor})
-
-  ui.batchSet("Header_Gradient", {color = toColor, active = true})
-  ui.batchSet("Header_Deco", {color = toColor, active = true})
+  ui.batchSet("Header_ColorProgress", {color = XML.rgbaFromName(toColor, "Header_ColorProgress"), active = true})
+  ui.batchSet("Header_Gradient", {color = XML.rgbaFromName(toColor, "Header_Gradient"), active = true})
+  ui.batchSet("Header_Deco", {color = XML.rgbaFromName(toColor, "Header_Deco"), active = true})
   ui.hide("Header_GradientTransition")
   ui.hide("Header_DecoTransition")
   ui.show("Header_Gradient")
@@ -2598,7 +2613,7 @@ ui.setTacStep = function(stepName, params)
       end
       coroutine.yield(0)
       for _, each in ipairs(data.childButtons) do
-        ui.show(each, nil, {skipAnimation = params.skipAnimation})
+        ui.show(each, params.skipAnimation)
       end
     end
 
@@ -2619,7 +2634,7 @@ ui.setTacStep = function(stepName, params)
       end
       for _, each in ipairs(data.childButtons) do
         ui.batchSet(each, {interactable = open})
-        ui.setShowing(each, open, nil, {skipAnimation = params.skipAnimation})
+        ui.setShowing(each, open, params.skipAnimation)
       end
       --Set footer
       ui.batchSet(data.footer, {active = not open})
@@ -3031,7 +3046,7 @@ Tac.closePreviousState = function(callback, params)
       return 1
     end)
     if params.skipAnimation or params.fastClose then
-      ui.hide("icon_agenda", nil, {skipAnimation = true})
+      ui.hide("icon_agenda", true)
       tryCallback()
     else
       Coru.run(closeCo, {callback = callback})
@@ -3991,8 +4006,8 @@ PShield.updateUI = function(skipAnimation, onlyUpdatePlanet)
 
     --does the shield UI need to be hidden?
     if dataState.visible ~= 0 and (dataState.enabled == 0 or not PShield.visible) then
-      ui.hide("p"..i.."_ShieldDisabled", nil, {skipAnimation = skipAnimation})
-      ui.hide("p"..i.."_ShieldEnabled", nil, {skipAnimation = skipAnimation})
+      ui.hide("p"..i.."_ShieldDisabled", skipAnimation)
+      ui.hide("p"..i.."_ShieldEnabled", skipAnimation)
       ui.batchSet("p"..i.."_Btn_shieldOverride", {active = false, interactable = false})
       dataState.visible = 0
       return
@@ -4001,7 +4016,7 @@ PShield.updateUI = function(skipAnimation, onlyUpdatePlanet)
     --Do we need to play the showing animation?
     if dataState.visible == 0 and PShield.visible and dataState.enabled ~= 0 then
       _animatingShields[i] = Coru.wait(0.61, onShieldActivated)
-      ui.show("p"..i.."_ShieldEnabled", nil, {skipAnimation = skipAnimation})
+      ui.show("p"..i.."_ShieldEnabled", skipAnimation)
       return
     end
 
@@ -4023,10 +4038,10 @@ PShield.updateUI = function(skipAnimation, onlyUpdatePlanet)
     end
 
     if dataState.enabled == -1 and dataState.visible == 1 then
-      ui.show("p"..i.."_ShieldDisabled", nil, {skipAnimation = skipAnimation})
+      ui.show("p"..i.."_ShieldDisabled", skipAnimation)
       dataState.visible = -1
     elseif dataState.enabled == 1 and dataState.visible == -1 then
-      ui.hide("p"..i.."_ShieldDisabled", nil, {skipAnimation = skipAnimation})
+      ui.hide("p"..i.."_ShieldDisabled", skipAnimation)
       dataState.visible = 1
     end
   end
@@ -5437,6 +5452,9 @@ function onPlayerPing(player, position, object)
     _pingDoOnce = false
   end
 
+  local i = math.random(1, #data.playableColors)
+  Tac.setColor({color = data.playableColors[i]})
+
   --local rgbaVal = "rgba(7.1,1,0.2,1.2)"
   --local subOpacity, matchCount = string.gsub(rgbaVal, "(%d+%.?%d*)%s*%p%s*(%d+%.?%d*)%s*%p%s*(%d+%.?%d*)%s*%p%s*(%d+%.?%d*)", "%1 %2 %3 a")
   --print(subOpacity, " #: ", matchCount)
@@ -6028,7 +6046,7 @@ end
 XML.rgbaFromName = function(colorName, elementID)
   local preserveOpacity = 1
   if elementID then
-    preserveOpacity = XML.getColor(elementId)
+    preserveOpacity = XML.getColor(elementID)
     preserveOpacity = preserveOpacity and preserveOpacity.a or 1
   end
   local color = Color.fromString(colorName)
@@ -6040,7 +6058,7 @@ end
 XML.rgbaFromTable = function(colorTable, elementID)
   local preserveOpacity = colorTable.a or 1
   if elementID then
-    preserveOpacity = XML.getColor(elementId)
+    preserveOpacity = XML.getColor(elementID)
     preserveOpacity = preserveOpacity and preserveOpacity.a or 1
   end
   local tbl = {colorTable.r, colorTable.g, colorTable.b, preserveOpacity}
@@ -6341,7 +6359,7 @@ end
 
 --uiClips-----------------------------------------------------------------------
 
---optional params = {from, to , duration, rgbaColor, lerp}
+--optional params = {from, to , duration, lerp}
 uiClips.fadeOut = function(elementID, params)
   params = params or {}
   local co = coroutine.create(function()
@@ -6351,8 +6369,11 @@ uiClips.fadeOut = function(elementID, params)
       local _xmlCol = XML.getColor(elementID) or {r = 1, g = 1, b = 1}
     local color = {_xmlCol.r,_xmlCol.g,_xmlCol.b, iOpacity}--preserve current tint
     local lerp = params.lerp or Tween.smooth
-    local iTime = Time.time
 
+    self.UI.setAttributes(elementID, {active = true, color = "rgba("..table.concat(color, ",")..")"})
+    coroutine.yield(0)
+
+    local iTime = Time.time
     while Time.time - iTime <= duration do
       local percent = (Time.time - iTime)/duration
       if percent > 1 then percent = 1 end
@@ -6366,14 +6387,14 @@ uiClips.fadeOut = function(elementID, params)
     self.UI.setAttribute(elementID, "active", false)
     coroutine.yield(1)
     color[4] = iOpacity
-    ui.batchSet(elementID, {color = "rgba("..table.concat(color, ",")..")"})
+    ui.batchSet(elementID, {active = false, color = "rgba("..table.concat(color, ",")..")"})
     return 1
   end)
 
   return co
 end
 
---optional params = {from, to , duration, rgbaColor, lerp}
+--optional params = {from, to , duration, lerp}
 uiClips.fadeIn = function(elementID, params)
   params = params or {}
   local co = coroutine.create(function()
@@ -6383,12 +6404,12 @@ uiClips.fadeIn = function(elementID, params)
       local _xmlCol = XML.getColor(elementID) or {r = 1, g = 1, b = 1}
     local color = {_xmlCol.r,_xmlCol.g,_xmlCol.b, iOpacity}--preserve current tint
     local lerp = params.lerp or Tween.smooth
-    local iTime = Time.time
 
     --initialize the element to starting opacity and make sure its active
     self.UI.setAttributes(elementID, {active = true, color = "rgba("..table.concat(color, ",")..")"})
     coroutine.yield(1)
 
+    local iTime = Time.time
     while Time.time - iTime <= duration do
       local percent = (Time.time - iTime)/duration
       if percent > 1 then percent = 1 end
@@ -6419,20 +6440,21 @@ uiClips.shrink = function(elementID, params)
   return uiClips.scale(elementID, false, params)
 end
 
+--params = {origin = {x,y,z}(scale of element normally), magnitude(how much to scale), duration, lerp,}
 uiClips.scale = function(elementID, scaleUp, params)
   params = params or {}
   local co = coroutine.create(function()
-    local t1 = Time.time
     local duration = params.duration or 0.25
     local lerp = params.lerp or Tween.smooth
 
-    local originScale = params.from or XML.getScale(elementID)--{x = #, y = #, z = #}
-    local effectMagnitude = params.to or {x = 0.01, y = 0.01, z = 1}
+    local originScale = params.origin or XML.getScale(elementID)--{x = #, y = #, z = #}
+    local effectMagnitude = params.magnitude or {x = 0.01, y = 0.01, z = 1}
     local iScale = {x = scaleUp and effectMagnitude.x or originScale.x, y = scaleUp and effectMagnitude.y or originScale.y, z = 1}
     local endScale = {x = scaleUp and originScale.x or effectMagnitude.x, y = scaleUp and originScale.y or effectMagnitude.y, z = 1}
 
     self.UI.setAttributes(elementID, {active = true, scale = iScale.x.." "..iScale.y.." "..iScale.z})
     coroutine.yield(0)
+    local t1 = Time.time
     while Time.time - t1 < duration do
       local percent = (Time.time - t1)/duration
       local modifiedPercent = lerp(percent)
@@ -6446,14 +6468,14 @@ uiClips.scale = function(elementID, scaleUp, params)
       self.UI.setAttribute(elementID, "active", false)
       coroutine.yield(1)
     end
-    ui.batchSet(elementID, {scale = endScale.x.." "..endScale.y.." 1"})
+    ui.batchSet(elementID, {active = scaleUp and true or false, scale = originScale.x.." "..originScale.y.." 1"})
     return 1
   end)
   return co
 end
 
 uiClips.revertScale = function(elementID, params)
-  local _scale = params.from or {x = 1, y = 1, z = 1}
+  local _scale = params.origin or {x = 1, y = 1, z = 1}
   ui.batchSet(elementID, {scale = _scale.x.." ".._scale.y.." 1"})
 end
 
@@ -6493,6 +6515,7 @@ end
 --params(defaults) = {duration = 0.25, lerp, padding = 1.2, from = {x = #, y = #}, to = {x = #, y = #}}
 uiClips.slide = function(elementID, dir, slideIn, params)
   params = params or {}
+  slideIn = slideIn and true or false --cast to bool
   local directionToMod = { ["LEFT"] = {target = "x", dir = -1}, ["RIGHT"] = {target = "x", dir = 1}, ["UP"] = {target = "y", dir = -1}, ["DOWN"] = {target = "y", dir = 1}}
   local eDirections = {
     ["Left"] = "LEFT", ["left"] = "LEFT", [4] = "LEFT", ["a"] = "LEFT", ["LEFT"] = "LEFT",
@@ -6515,13 +6538,14 @@ uiClips.slide = function(elementID, dir, slideIn, params)
     end
     local slidePos = params.to or getSlidePos()--{x = #, y = #} --where is the element when it is fully displaced by the slide effect
 
-    local t1 = Time.time
     local duration = params.duration or 0.25
     local lerp = params.lerp or Tween.smooth
     local iPos = slideIn and slidePos or restingPos
     local endPos = slideIn and restingPos or slidePos
 
     self.UI.setAttributes(elementID, { active = true, offsetXY = iPos.x.." "..iPos.y })
+    coroutine.yield(0)
+    local t1 = Time.time
     while Time.time - t1 < duration do
       local percent = (Time.time - t1)/duration
       local modifiedPercent = lerp(percent)
@@ -6536,7 +6560,7 @@ uiClips.slide = function(elementID, dir, slideIn, params)
       self.UI.setAttribute(elementID, "active", false)
       coroutine.yield(1)
     end
-    ui.batchSet(elementID, {offsetXY = restingPos.x .." ".. restingPos.y})
+    ui.batchSet(elementID, {active = slideIn, offsetXY = restingPos.x .." ".. restingPos.y})
 
     return 1
   end)
