@@ -906,16 +906,26 @@ local ui = {
                     children = {}
                   },
                   {--Focus banner
-                    tag = "Image",
+                    tag = "Panel",
                     attributes = {
-                      id = "Img_FocusBanner",
-                      image = "FocusPlanet_Banner",
-                      preserveAspect = true,
+                      id = "Pnl_FocusBannerTransform",
                       width = 452 * 2.6,
+                      height = 1945,
+                      raycastTarget = false,
                       offsetXY = "0 -477",
-                      active = false
-                    }
-                  },
+                    },
+                    children = {--Img_FocusBanner
+                      tag = "Image",
+                      attributes = {
+                        id = "Img_FocusBanner",
+                        image = "FocusPlanet_Banner",
+                        preserveAspect = true,
+                        width = 452 * 2.6,
+                        --height = 400,
+                        active = false
+                      }
+                    },
+                }
                   --Planets injected here
                 }
               },
@@ -1298,7 +1308,7 @@ local ui = {
   }
 }
 
---Active player != Turns.turn_color. The Tactician allows players to be "active" outside of their turn
+--Active player != Turns.turn_color. The Tactician allows players to be "active" outside of their game turn
 local ActivePlayer = {
   color = "Black",
   previous = "Black",
@@ -1507,8 +1517,24 @@ ui.generateXML = function(callback)
     hide = {
       clip = uiClips.fadeOut,
       params = {duration = 0.4},
-      onStop = uiClips.revertFade
+      onStop = function(id, params) uiClips.revertFade(id, params) ui.batchSet("GhostMask_Footer", {active = true}) end,
+      onStart = function() ui.batchSet("GhostMask_Footer", {active = false}) end,
+      onEnd = function() ui.batchSet("GhostMask_Footer", {active = true}) end
     },
+  })
+  ui.newShow("Img_FocusBanner", {
+    active = false,
+    show = {
+      clip = uiClips.slideIn_Up,
+      onStop = uiClips.revertSlide,
+      params = {duration = 0.7, magnitude = {x = 0, y = -260}, padding = 1},
+      delay = 0.1
+    },
+    hide = {
+      clip = uiClips.slideOut_Down,
+      onStop = uiClips.revertSlide,
+      params = {duration = 0.15, magnitude = {x = 0, y = -100}, padding = 1, lerp = Tween.linear},
+    }
   })
 
   local function turnUI()
@@ -1968,10 +1994,9 @@ ui.generateXML = function(callback)
               {--Shield image parent
                 tag = "panel",
                 attributes = {
-                  id = _id .. "_shieldShowSkip",
+                  id = _id .. "_shieldTransform",
                   offsetXY = "0 -8",
                   rotation = "0 0 12",
-                  active = false,
                   raycastTarget = false,
                 },
                 children = {
@@ -1992,7 +2017,7 @@ ui.generateXML = function(callback)
                       raycastTarget = false,
                       active = false
                     }
-                  }
+                  },
                 }
               },
               { --Override button
@@ -2141,7 +2166,7 @@ ui.generateXML = function(callback)
 end
 
 --optional params = {show, hide, active, isButton}
-      --params.show/hide = {clip = coroutine(uiClip.someClip), delay = #(time), params = table(passed to clip), onStop = function(revert changes to initial state)}
+    --params.show/hide = {clip = coroutine(uiClip.someClip), delay = #(time), params = table(passed to clip), onStop = function(revert changes to initial state), onStart = func(id, params, isInDelay)}
 ui.newShow = function(elementID, params)
   params = params or {}
   params.show = params.show or {}
@@ -2157,18 +2182,26 @@ ui.newShow = function(elementID, params)
 
   data.showDelay = params.show.delay or false
   data.showClip = params.show.clip or false
+  data.onStartShow = params.show.onStart or false
+  data.onStopShow = params.show.onStop or false
+  data.onEndShow = params.show.onEnd or false
   data.show = function(id, callback, showParams)
     local _data = ui._showData[id]
     local function animateShow(completionCode)
       _data.inDelay = false
       if completionCode == -1 then return end --coroutine/show was cancelled
+      if _data.onStartShow then _data.onStartShow(id, showParams) end
+      local function onAnimComplete()
+        if _data.onEndShow then _data.onEndShow(id, showParams) end
+        if callback then callback() end
+      end
       if _data.showClip then
         local co = _data.showClip(id, showParams)
         _data.runningAnimation = co
-        Coru.run(co, {callback = callback})
+        Coru.run(co, {callback = onAnimComplete})
       else
         ui.batchSet(id, {active = true})
-        if callback then callback() end
+        onAnimComplete()
       end
     end
     _data.showState = true
@@ -2176,11 +2209,11 @@ ui.newShow = function(elementID, params)
       _data.inDelay = true
       _data.isAnimating = 1
       _data.runningAnimation = Coru.wait(_data.showDelay, animateShow)
+      if _data.onStartShow then _data.onStartShow(id, showParams, true) end
     else
       animateShow()
     end
   end
-  data.onStopShow = params.show.onStop or false
   data.stopShow = function(id, stopParams)
     local _data = ui._showData[id]
     if _data.runningAnimation then
@@ -2199,18 +2232,27 @@ ui.newShow = function(elementID, params)
 
   data.hideDelay = params.hide.delay or false
   data.hideClip = params.hide.clip or false
+  data.onStartHide = params.hide.onStart or false
+  data.onStopHide = params.hide.onStop or false
+  data.onEndHide = params.hide.onEnd or false
   data.hide = function(id, callback, hideParams)
     local _data = ui._showData[id]
     local function animateHide(completionCode)
       _data.inDelay = false
       if completionCode == -1 then return end
+      if _data.onStartHide then _data.onStartHide(id, hideParams) end
+      local function onAnimComplete()
+        if _data.onEndHide then _data.onEndHide(id, hideParams) end
+        if callback then callback() end
+      end
+
       if _data.hideClip then
         local co = _data.hideClip(id, hideParams)
         _data.runningAnimation = co
-        Coru.run(co, {callback = callback})
+        Coru.run(co, {callback = onAnimComplete})
       else
         ui.batchSet(id, {active = false})
-        if callback then callback() end
+        onAnimComplete()
       end
     end
 
@@ -2219,11 +2261,11 @@ ui.newShow = function(elementID, params)
       _data.inDelay = true
       _data.isAnimating = -1
       _data.runningAnimation = Coru.wait(_data.hideDelay, animateHide)
+      if _data.onStartHide then _data.onStartHide(id, hideParams, true) end
     else
       animateHide()
     end
   end
-  data.onStopHide = params.hide.onStop or false
   data.stopHide = function(id, stopParams)
     local _data = ui._showData[id]
     if _data.runningAnimation then
@@ -3584,7 +3626,9 @@ Planets.setFocus = function(params, disable)
   if skipAnim then
     Planets._displayedFocus = Invasion.focus
     Planets.buildActiveSystem(tryCallback, skipAnim)
-    ui.batchSet("Img_FocusBanner", {active = Invasion.focus and true and not disable})
+    --ui.batchSet("Img_FocusBanner", {active = Invasion.focus and true and not disable})
+    local _isActive = Invasion.focus and true and not disable or false
+    ui.setShowing("Img_FocusBanner", _isActive, true)
     return
   end
   --else
@@ -3623,7 +3667,9 @@ Planets.setFocus = function(params, disable)
   --temp
   Planets.buildActiveSystem(tryCallback, skipAnim)
   Planets._displayedFocus = Invasion.focus
-  ui.batchSet("Img_FocusBanner", {active = Invasion.focus and true and not disable})
+  --ui.batchSet("Img_FocusBanner", {active = Invasion.focus and true and not disable})
+  local _isActive = Invasion.focus and true and not disable or false
+  ui.setShowing("Img_FocusBanner", _isActive)
   --^Temp
 end
 
@@ -5452,8 +5498,9 @@ function onPlayerPing(player, position, object)
     _pingDoOnce = false
   end
 
-  local i = math.random(1, #data.playableColors)
-  Tac.setColor({color = data.playableColors[i]})
+  --Set active player to random color
+  --local i = math.random(1, #data.playableColors)
+  --Tac.setColor({color = data.playableColors[i]})
 
   --local rgbaVal = "rgba(7.1,1,0.2,1.2)"
   --local subOpacity, matchCount = string.gsub(rgbaVal, "(%d+%.?%d*)%s*%p%s*(%d+%.?%d*)%s*%p%s*(%d+%.?%d*)%s*%p%s*(%d+%.?%d*)", "%1 %2 %3 a")
@@ -6512,7 +6559,7 @@ uiClips.slideOut_Down = function(elementID, params)
   return uiClips.slide(elementID, "DOWN", false, params)
 end
 
---params(defaults) = {duration = 0.25, lerp, padding = 1.2, from = {x = #, y = #}, to = {x = #, y = #}}
+--params(defaults) = {duration = 0.25, lerp, padding = 1.2, magnitude = {x = #, y = #}}
 uiClips.slide = function(elementID, dir, slideIn, params)
   params = params or {}
   slideIn = slideIn and true or false --cast to bool
@@ -6536,7 +6583,7 @@ uiClips.slide = function(elementID, dir, slideIn, params)
       dim = restingPos[targetDimention] + (dim*dirMod)
       return {x = targetDimention == "x" and dim or restingPos.x, y = targetDimention == "y" and dim or restingPos.y}
     end
-    local slidePos = params.to or getSlidePos()--{x = #, y = #} --where is the element when it is fully displaced by the slide effect
+    local slidePos = params.magnitude or getSlidePos()--{x = #, y = #} --where is the element when it is fully displaced by the slide effect
 
     local duration = params.duration or 0.25
     local lerp = params.lerp or Tween.smooth
