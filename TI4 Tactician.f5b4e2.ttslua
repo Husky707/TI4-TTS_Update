@@ -4585,34 +4585,24 @@ MultiRoller.getAttributes = function(color, opponentColor, engagementType, locat
   return unitAttrs
 end
 
---queue functionality added to bombardment & spaceCannonDef to roll for all planets with 1 click
-local _activeRolls = {}--[color] = {engagementType, timestamp}
-local _rollQueue = {}--[color] = {params,{...}}
---each player can have a queue of a single roll type at a time (cannot Q bombardment if spaceCannon is Q'd)
---however, a queue for a given roll type may have multiple rolls of that type waiting
+--queue functionality added to roll for all planets with 1 click (Bombardment/spaceCannonDef)
+MultiRoller.status = {}--[color] = nil or engagementType
+MultiRoller.queue = {} --[color] = {}
+--Each player may have only 1 queued engagementType at a time.
+--That player will be unable to request rolls or queues while the current queue is resolving
+MultiRoller.tryNewQueue = function(color)
+  return not MultiRoller.status[color] and (MultiRoller.queue[color] == nil or not next(MultiRoller.queue[color]))
+end
+
 MultiRoller.resolveEngagement = function(color, engagementType, location, fillOnly)
   assert(eEngagementTypes[engagementType])
   local _multiRollerObj = MultiRoller.getRoller(color)
   assert(_multiRollerObj, "ROLL ABORTED: Could not find the " .. color .. " player's Multi-Roller")
 
-  --if the player is already rolling for this engagment, queue the roll
-  --Only allow spaceCannonDef and bombardment rolls to queue (To resolve all rolls of that type with one click). Other roll types don't need this functionality
-  local function maybeQueueRoll()
-    if not _activeRolls[color] or (engagementType ~= "spaceCannonDef" and engagementType ~= "bombardment") then return false end
-    local timeStamp = Time.time
-    if timeStamp - _activeRolls[color].timeStamp >= 8 then
-      --previous active roll timed out or was resolved and we did not get a callback
-      _activeRolls[color] = false
-      _rollQueue[color] = {} --clear any queued rolls too, this is likely an error scenario
-      return false
-    end
-    --dont queue if we are rolling a diferent type of ability
-    if _activeRolls[color].engagementType ~= engagementType then return false end
-    _rollQueue[color] = _rollQueue[color] or {}
-    table.insert(_rollQueue[color], {color = color, engagementType = engagementType, location = location, fillOnly = fillOnly})
-    return true
+  if(MultiRoller.status[color]) then
+    pcall(printToAll("Roll already in progress, " .. engagementType .. " roll aborted.", Color.Red))
+    return
   end
-  if maybeQueueRoll() then return end
 
   --update/rebuild unit tables
   MultiRoller.buildUnitMap(ActivePlayer.system)
@@ -4696,7 +4686,7 @@ MultiRoller.resolveEngagement = function(color, engagementType, location, fillOn
   end
 
   local function generateMsg()
-    local prefix = { 'AutoFill ' .. eEngagementTypes[engagementType].name }
+    local prefix = { 'AutoRoll ' .. eEngagementTypes[engagementType].name }
     if location ~= "Space" then
         table.insert(prefix, '(' .. location .. ')')
     end
@@ -4753,9 +4743,9 @@ MultiRoller.resolveEngagement = function(color, engagementType, location, fillOn
   pcall(printToAll(generateMsg(), color))
 
   if fillOnly then
-      pcall(printToColor('AutoFill: Units filled; left click to fill and roll.', params.clickerColor, "Yellow"))
+    pcall(printToColor('AutoFill: Units filled; left click to fill and roll.', params.clickerColor, "Yellow"))
   else
-      _activeRolls[color] = {timeStamp = Time.time, engagementType = engagementType}
+    MultiRoller.status[color] = true
   end
 
   --printTable(unitAttributes)
@@ -4768,24 +4758,49 @@ MultiRoller.resolveEngagement = function(color, engagementType, location, fillOn
       plasmaScoring = plasmaScoring,
       rollType = doClick and rollType or false,
       extraModifiers = extraUnitModifiers or false,
-      callback = {obj = self, func = "onMultirollComplete"}
+      location = location,
+      callback = {guid = self.getGUID(), obj = self, func = "onMultirollComplete"},
+      queueCallback = doClick and {guid = self.getGUID(), obj = self, func = "onMultirollQueued"} or nil
   })
+end
+
+--cannot queue fillOnly rolls
+MultiRoller.queueEngagement = function(color, engagementType, location)
+  if(not MultiRoller.status[color]) then
+    MultiRoller.resolveEngagement(color, engagementType, location)
+  else
+    if(MultiRoller.queue[color] == nil) then
+      MultiRoller.queue[color] = {}
+    end
+    table.insert(MultiRoller.queue[color], {engagementType = engagementType, location = location})
+  end
 end
 
 function onMultirollComplete(params)
   params = params or {}
-  local color = params.color or false
-  if not color then return end
-
-  _activeRolls[color] = false
+  local color = params.color
+  MultiRoller.status[color] = nil
   if params.error then
-    _rollQueue[color] = nil
-    return
+    pcall(printToAll("An error occored during the roll: \n" .. params.error, Color.Red))
+  end
+
+  if MultiRoller.queue[color] and next(MultiRoller.queue[color]) then
+    local nextRoll = table.remove(MultiRoller.queue[color], 1)
+    MultiRoller.resolveEngagement(color, nextRoll.engagementType, nextRoll.location)
+  end
+end
+
+function onMultirollQueued(params)
+  params = params or {}
+  local color = params.color
+  if(params.failed) then
+    MultiRoller.status[color] = false
+    if not MultiRoller.status[color] and MultiRoller.queue[color] and next(MultiRoller.queue[color]) then
+      local nextRoll = table.remove(MultiRoller.queue[color], 1)
+      MultiRoller.resolveEngagement(color, nextRoll.engagementType, nextRoll.location)
+    end
   else
-    if not _rollQueue[color] or not next(_rollQueue[color]) then return end
-    local nextRoll = table.remove(_rollQueue[color], 1)
-    pcall(printToAll("\nRoll for "..nextRoll.location..":", color))
-    MultiRoller.resolveEngagement(nextRoll.color, nextRoll.engagementType, nextRoll.location, nextRoll.fillOnly)
+    MultiRoller.status[color] = true
   end
 end
 
@@ -5357,9 +5372,8 @@ function onSmartButtonClicked(clickPlayer, mouseBtn, btnID)
     ["bombardment"] = resolveAtFocusPlanet,
     ["groundCombat"] = resolveAtFocusPlanet,
     ["invasionContext"] = resolveContext,
-    ["catch"] = function(sCol) print("Caught unregistered case >", rollTarget, "< from >", btnID, "< in onSmartButtonClicked") end
+    ["catch"] = function(sCol) print("Caught unregistered case >", rollTarget, "< from >", btnID, "< in onSmartButtonClicked") return -1 end
   }
-
   local try = switch[rollTarget] and rollTarget or "catch"
 
   for _,eachCol in ipairs(smartColor) do
@@ -5370,9 +5384,9 @@ end
 
 --Resolves spaceCannonDef or bombardment on all possible planets
 function onSmartButtonClicked_AutoResolve(clickPlayer, mouseBtn, btnID)
-  local clickType = mouseBtn == "-1" and "roll" or mouseBtn == "-2" and "fill" or false
-  if not clickType or not ActivePlayer.system then return end
+  if mouseBtn ~= "-1" or not ActivePlayer.system then return end
   local rollTarget = assert(ui.btnLookup[btnID].rollTarget)
+
   local function clickerCanRollFor(color)
     if not Tac.rollForMe[color] and clickPlayer.color ~= color then
       if color == "Grey" or color == "Black" then
@@ -5391,14 +5405,25 @@ function onSmartButtonClicked_AutoResolve(clickPlayer, mouseBtn, btnID)
     for _,eachPlanet in ipairs(ActivePlayer.system.planets or {}) do
       local owner = Planets.getOwner(eachPlanet.name)
       if owner ~= "Grey" and owner ~= ActivePlayer.color and clickerCanRollFor(owner) then
-        MultiRoller.resolveEngagement(owner, "spaceCannonDef", eachPlanet.name, clickType == "fill" and true or false)
+        MultiRoller.queueEngagement(owner, "spaceCannonDef", eachPlanet.name)
       end
     end
   --Auto resolve each bombardment
   elseif clickerCanRollFor(ActivePlayer.color) then
-    Plasma.setEnabled(true)
-    for _,eachPlanet in ipairs(ActivePlayer.system.planets or {}) do
-      MultiRoller.resolveEngagement(ActivePlayer.color, "bombardment", eachPlanet.name, clickType == "fill" and true or false)
+    if(not MultiRoller.tryNewQueue(ActivePlayer.color)) then
+      if(clickPlayer.color == ActivePlayer.color) then
+        printToColor("A roll is already in progress.", clickPlayer.color, Color.Red)
+      else
+        printToColor("The " .. ActivePlayer.color .." player is already rolling.", clickPlayer.color, Color.Red)
+      end
+    else
+      Plasma.setEnabled(true)
+      for _,eachPlanet in ipairs(ActivePlayer.system.planets or {}) do
+        local owner = Planets.getOwner(eachPlanet.name)
+        if(owner != ActivePlayer.color) then
+          MultiRoller.queueEngagement(ActivePlayer.color, "bombardment", eachPlanet.name)
+        end
+      end
     end
   end
 end

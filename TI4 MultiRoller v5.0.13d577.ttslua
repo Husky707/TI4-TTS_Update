@@ -278,6 +278,20 @@ function updateColor()
     end
 end
 
+--params: {listener *defaults to activeListener, error = "string", failed = "reson", hits, color, rollType, location}
+function tryCallback(params)
+  local listener = params.listener
+  if not listener or type(listener) ~= "table" then return end
+  if listener.obj == nil then
+   listener.obj = getObjectFromGUID(listener.guid)
+  end
+  if listener.obj == nil or not listener.obj.getVar(listener.func) then return end
+
+  params.listener = nil
+  params.color = params.color or myColor()
+  listener.obj.call(listener.func, params)
+end
+
 -------------------------------------------------------------------------------
 
 function generateRollerXmlTable(unit_data)
@@ -941,7 +955,7 @@ function Roller.addDice(params)
     table.insert(Roller._dice, copy)
 end
 
-function Roller.roll(clickerColor, playerColor, rollLabel, callback)
+function Roller.roll(clickerColor, playerColor, rollLabel, location, callback)
     assert(type(clickerColor) == 'string', 'bad clickerColor')
     assert(type(playerColor) == 'string', 'bad playerColor')
     assert(type(rollLabel) == 'string', 'bad rollLabel')
@@ -953,7 +967,8 @@ function Roller.roll(clickerColor, playerColor, rollLabel, callback)
         playerColor = playerColor,
         playerName = playerName,
         rollLabel = rollLabel,
-        callback = callback
+        callback = callback,
+        location = location
     })
     startLuaCoroutine(self, 'Roller_RollDiceCoroutine')
 end
@@ -1017,28 +1032,24 @@ function Roller_RollDiceCoroutine()
     local playerColor = params.playerColor
     local playerName = params.playerName
     local rollLabel = params.rollLabel
+    local location = params.location
     local callback = params.callback
 
     local hits = 0
-    local function tryCallback(rollFailed)
-      if not callback or type(callback) ~= "table" or callback.obj == nil or not callback.obj.getVar(callback.func) then return end
-
-      local result = rollFailed and {error = rollFailed} or {rollType = rollLabel, color = clickerColor, hits = hits}
-      callback.obj.call(callback.func, result)
-    end
 
     if Roller.isRollInProgress() then
         printToColor('Dice are already being rolled.', clickerColor, {0.8,0.2,0.2})
-        tryCallback("rollInProgress")
+        tryCallback({failed = "Roll-In-Progress", listener = callback})
         return 1
     end
     if #Roller._dice == 0 then
         printToColor('No valid units for ' .. rollLabel, clickerColor, {0.8,0.2,0.2})
-        tryCallback("noUnits")
+        tryCallback({failed = "No valid units", listener = callback})
         return 1
     end
     Roller._setRollInProgress(true)
-    printToAll(playerName .. ' rolling for ' .. rollLabel, playerColor)
+    local locationString = location and location ~= "Space" and location ~= "space" and " ("..location..")" or ""
+    printToAll(playerName .. ' rolling for ' .. rollLabel.. locationString, playerColor)
 
     math.randomseed(os.time())
 
@@ -1225,14 +1236,15 @@ function Roller_RollDiceCoroutine()
     end
 
     Roller._setRollInProgress(false)
-    tryCallback()
+    tryCallback({listener = callback, rollType = rollLabel, color = playerColor, hits = hits, location = location})
     return 1
 end
 
 -------------------------------------------------------------------------------
 
-function rollDiceForAbility(player, ability, callback)
+function rollDiceForAbility(player, ability, location, callback, queueCallback)
     if player and ((not player.seated) or player.color == 'Grey') then
+        tryCallback({failed = "Invalid player: " .. player.color, listener = queueCallback})
         return
     end
     local clickerColor = player and player.color or myColor()
@@ -1240,6 +1252,7 @@ function rollDiceForAbility(player, ability, callback)
 
     if Roller.isRollInProgress() then
         broadcastToColor("Dice are already being rolled.", clickerColor, {0.8, 0.2, 0.2})
+        tryCallback({failed = "Dice are already being rolled", listener = queueCallback})
         return
     end
 
@@ -1273,12 +1286,15 @@ function rollDiceForAbility(player, ability, callback)
 
     local rollLabel = ABILITIES[ability].name
     if not haveDice then
-        broadcastToColor('No valid units for ' .. rollLabel, clickerColor, {0.8, 0.2, 0.2})
+       local locationString = location and type(location) == "string" and location ~= "Space" and location ~= "space" and " ("..location..")" or ""
+        broadcastToColor('No valid units for ' .. rollLabel..locationString, clickerColor, {0.8, 0.2, 0.2})
+        tryCallback({failed = "No valid units", listener = queueCallback} )
         return
     end
 
     self.clearButtons()
-    Roller.roll(clickerColor, playerZoneColor, rollLabel, callback)
+    Roller.roll(clickerColor, playerZoneColor, rollLabel, location, callback)
+    tryCallback({listener = queueCallback})
 end
 
 function printUnitModifiers(unitAttrs, dstColor)
@@ -1434,7 +1450,9 @@ function inject(params)
     assert(type(params.plasmaScoring) == 'boolean')
     assert((not params.rollType) or type(params.rollType) == 'string')
     assert((not params.extraModifiers) or type(params.extraModifiers) == 'table')
-    assert(not params.callback or type(params.callback) == "table", "Roll callback must be a table with .obj and .func defined.")
+    assert(not params.callback or type(params.callback) == "table", "Roll callback must be a table with .guid and .func defined.")
+    assert(not params.location or type(params.location) == "string", "location should be nil or the sttring name of a planet.")
+    assert(not params.queueCallback or type(params.queueCallback) == "table", "queueCallback must be a table with .guid and .func defined.")
 
     if params.clickerColor == 'Grey' then
         return
@@ -1457,7 +1475,7 @@ function inject(params)
     updateAbilities()
 
     if params.rollType then
-        rollDiceForAbility(false, params.rollType, params.callback)
+        rollDiceForAbility(false, params.rollType, params.location, params.callback, params.queueCallback)
     end
 
     -- Require click handling absorb these this frame, otherwise lost.
