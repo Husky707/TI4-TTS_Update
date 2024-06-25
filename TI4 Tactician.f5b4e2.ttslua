@@ -3608,6 +3608,7 @@ Planets.eAnim = {
   ["building"]  = function() return "building"  end,
   ["focusUp"]   = function() return "focusUp"   end,
   ["focusDown"] = function() return "focusDown" end,
+  ["focusSwap"] = function() return "focusSwap" end
   --["idle"] = function() return "idle" end
 }
 
@@ -4759,8 +4760,7 @@ MultiRoller.resolveEngagement = function(color, engagementType, location, fillOn
       rollType = doClick and rollType or false,
       extraModifiers = extraUnitModifiers or false,
       location = location,
-      callback = {guid = self.getGUID(), obj = self, func = "onMultirollComplete"},
-      queueCallback = doClick and {guid = self.getGUID(), obj = self, func = "onMultirollQueued"} or nil
+      callback = doClick and {guid = self.getGUID(), obj = self, func = "onMultirollComplete"} or nil
   })
 end
 
@@ -4779,28 +4779,14 @@ end
 function onMultirollComplete(params)
   params = params or {}
   local color = params.color
-  MultiRoller.status[color] = nil
   if params.error then
     pcall(printToAll("An error occored during the roll: \n" .. params.error, Color.Red))
   end
 
+  MultiRoller.status[color] = false
   if MultiRoller.queue[color] and next(MultiRoller.queue[color]) then
     local nextRoll = table.remove(MultiRoller.queue[color], 1)
     MultiRoller.resolveEngagement(color, nextRoll.engagementType, nextRoll.location)
-  end
-end
-
-function onMultirollQueued(params)
-  params = params or {}
-  local color = params.color
-  if(params.failed) then
-    MultiRoller.status[color] = false
-    if not MultiRoller.status[color] and MultiRoller.queue[color] and next(MultiRoller.queue[color]) then
-      local nextRoll = table.remove(MultiRoller.queue[color], 1)
-      MultiRoller.resolveEngagement(color, nextRoll.engagementType, nextRoll.location)
-    end
-  else
-    MultiRoller.status[color] = true
   end
 end
 
@@ -6328,8 +6314,8 @@ Animate.newController = function()
   animation.onClipComplete = function(c_id, result)
     animation.runningCos[c_id] = nil
     if animation.status == "terminated" then return end
-    --Maybe start next
 
+    --Maybe start next
     if animation.sequence[c_id] then
       for _,eachID in pairs(animation.sequence[c_id]) do
         animation.startClip(eachID)
@@ -6392,7 +6378,7 @@ Animate.newController = function()
 
   --lists of clip ids that will be played after the given c_id
   --sequenceData = { next = {list of c_ids}, time = {[c_id] = delay}, percent = {[c_id] = %}} p: percentDelay| t: timeDelay(after completion)| c: onComplete(NoDelay)
-    --After the main clip ends, time elay will play the clip next clip after the given amount of time passes
+    --After the main clip ends, time delay will play the next clip after the given amount of time passes
     --percentDelay will play the clip after the main clip reaches the given percentage of completion
   animation.createSequence = function(c_id, sequenceData)
     if sequenceData.next then

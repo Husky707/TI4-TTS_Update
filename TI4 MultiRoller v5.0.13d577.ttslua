@@ -1242,9 +1242,9 @@ end
 
 -------------------------------------------------------------------------------
 
-function rollDiceForAbility(player, ability, location, callback, queueCallback)
+function rollDiceForAbility(player, ability, location, callback)
     if player and ((not player.seated) or player.color == 'Grey') then
-        tryCallback({failed = "Invalid player: " .. player.color, listener = queueCallback})
+        tryCallback({failed = "Invalid player: " .. player.color, listener = callback})
         return
     end
     local clickerColor = player and player.color or myColor()
@@ -1252,7 +1252,7 @@ function rollDiceForAbility(player, ability, location, callback, queueCallback)
 
     if Roller.isRollInProgress() then
         broadcastToColor("Dice are already being rolled.", clickerColor, {0.8, 0.2, 0.2})
-        tryCallback({failed = "Dice are already being rolled", listener = queueCallback})
+        tryCallback({failed = "Dice are already being rolled", listener = callback})
         return
     end
 
@@ -1288,13 +1288,12 @@ function rollDiceForAbility(player, ability, location, callback, queueCallback)
     if not haveDice then
        local locationString = location and type(location) == "string" and location ~= "Space" and location ~= "space" and " ("..location..")" or ""
         broadcastToColor('No valid units for ' .. rollLabel..locationString, clickerColor, {0.8, 0.2, 0.2})
-        tryCallback({failed = "No valid units", listener = queueCallback} )
+        tryCallback({failed = "No valid units", listener = callback} )
         return
     end
 
     self.clearButtons()
     Roller.roll(clickerColor, playerZoneColor, rollLabel, location, callback)
-    tryCallback({listener = queueCallback})
 end
 
 function printUnitModifiers(unitAttrs, dstColor)
@@ -1452,7 +1451,6 @@ function inject(params)
     assert((not params.extraModifiers) or type(params.extraModifiers) == 'table')
     assert(not params.callback or type(params.callback) == "table", "Roll callback must be a table with .guid and .func defined.")
     assert(not params.location or type(params.location) == "string", "location should be nil or the sttring name of a planet.")
-    assert(not params.queueCallback or type(params.queueCallback) == "table", "queueCallback must be a table with .guid and .func defined.")
 
     if params.clickerColor == 'Grey' then
         return
@@ -1475,7 +1473,7 @@ function inject(params)
     updateAbilities()
 
     if params.rollType then
-        rollDiceForAbility(false, params.rollType, params.location, params.callback, params.queueCallback)
+        rollDiceForAbility(false, params.rollType, params.location, params.callback)
     end
 
     -- Require click handling absorb these this frame, otherwise lost.
