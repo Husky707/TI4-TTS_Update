@@ -3318,19 +3318,17 @@ end
 
 -------Context and Focus
 Invasion.focus = false --or planetName
-Invasion.iFocus = 1 --index of the focus planet in its system's planet table
-Invasion._waitingFocus = {i = false, name = false}
 Invasion.setFocus = function(pIndex, skipAnimation) --index of the planet in its system's "planets" table
   local target = pIndex and Planets.getName(pIndex) or false
 
+  --Removing focus, but already dont have one
+  if(not target and not Invasion.focus) then return end
+
   --Repeated setting a target removes that target from focus like a toggle
-  local _currentNextState = Invasion._waitingFocus.name or Invasion.focus
-  target = target ~= _currentNextState and target
+  if(target == Invasion.focus) then target = false end
 
-  if target == _currentNextState then return end --?removing focus, but have none
-
-  --prevent focus setting while animating
-  if not Invasion.active or Planets._nextSystem or Planets.AnimState == Planets.eAnim.clearing() or Planets.AnimState == Planets.eAnim.building() then return end
+  --prevent focus setting while animating --!!!May be incomplete
+  if not Invasion.active or Planets._nextSystem or Planets.AnimState == Planets.eAnim.focusSwap() or Planets.AnimState == Planets.eAnim.clearing() or Planets.AnimState == Planets.eAnim.building() then return end
   if target then --validate the target planet
     --Check active system has a planet to focus
     if not ActivePlayer.system or not ActivePlayer.system.planets or not next(ActivePlayer.system.planets) then return end
@@ -3342,19 +3340,8 @@ Invasion.setFocus = function(pIndex, skipAnimation) --index of the planet in its
     if not inSystem then return end
   end
 
-  Invasion.focus = target
-  Invasion.iFocus = target and pIndex
-  Invasion._waitingFocus = {i = target and pIndex, name = target}
-
+--!Move to Planets section
   local function onFocusChangeComplete()
-    if Invasion._waitingFocus.name ~= Invasion.focus then
-      local nextFocus = Invasion._waitingFocus.i
-      Invasion._waitingFocus = {i = false, name = false}
-      Invasion.setFocus(nextFocus, skipAnimation)
-      return
-    end
-    Invasion._waitingFocus = {i = false, name = false}
-
     local fBool = Invasion.focus and true or false
     if fBool then
       ui.batchSet("SmartBtn_InvasionContext_Def", {color = Planets.getOwner(target)})
@@ -3372,9 +3359,11 @@ Invasion.setFocus = function(pIndex, skipAnimation) --index of the planet in its
     ui.batchSet("SmartBtn_SpaceCannonDef", {color = Planets.getFocusOrUniformOwner()})
   end
 
+  Invasion.focus = target
   Planets.setFocus({callback = onFocusChangeComplete, skipAnimation = skipAnimation}, not target)
 end
 
+--!unimplemented
 Invasion.showFocusButtons = function(hide)
   hide = hide and true or false
   local show = not hide
@@ -3460,18 +3449,43 @@ end
 --pTable = table of all planets in this system *optional, defaults to active system
 --index = i of the planet in the pTable
 Planets.getScale = function(index, pTable)
-  pTable = pTable or (ActivePlayer.system and ActivePlayer.system.planets)
+  return Planets.getRawScale(index, Planets._iFocus, pTable)
+  --[[pTable = pTable or (ActivePlayer.system and ActivePlayer.system.planets)
   if not pTable or not next(pTable) then return end
 
   local scale = Planets.focusLayouts[1][1].scale
-  if Invasion.focus and Invasion.iFocus == index then
+  if Planets._displayedFocus and Planets._iFocus == index then
     return "" .. scale .. " " .. scale .. " 1"
   end
 
   local pCount = #pTable
-  if Invasion.focus then index = Invasion.iFocus >= index and index or index -1 end
+  --if reading from the focusTable, planet indexes are shifted down by 1 (focus planet is removed from total planet count)
+  if Planets._displayedFocus then index = Planets._iFocus >= index and index or index -1 end
 
-  scale = Invasion.focus and Planets.focusLayouts[pCount][index].scale or Planets.layouts[pCount][index].scale
+  scale = Planets._displayedFocus and Planets.focusLayouts[pCount][index].scale or Planets.layouts[pCount][index].scale
+  if pCount == 1 then--apply additional scale bassed on the planet's radius
+    --ratio of change from default radius (a planet with the default radius will not be get additional scale)
+    local radScale = (pTable[index].radius/0.8) * 0.7 --Reduce the change
+    radScale = radScale >= 1 and radScale or 1 --Dont shrink small planets
+    scale = scale * radScale
+  end
+
+  return "" .. scale .. " " .. scale .. " 1"--]]
+end
+
+Planets.getRawScale = function(index, proxyFocusIndex, pTable)
+  proxyFocusIndex = proxyFocusIndex and proxyFocusIndex > 0 and proxyFocusIndex or -1
+  local scale = Planets.focusLayouts[1][1].scale
+  if proxyFocusIndex == index then
+    return "" .. scale .. " " .. scale .. " 1"
+  end
+
+  pTable = pTable or (ActivePlayer.system and ActivePlayer.system.planets)
+  if not pTable or not next(pTable) then return end
+  local pCount = #pTable
+  local useFocusTable = proxyFocusIndex > 0
+  local mappedIndex = useFocusTable and Planets.mapPlanetIndexToFocusIndex(index, proxyFocusIndex, pCount) or index
+  scale = useFocusTable and Planets.focusLayouts[pCount][mappedIndex].scale or Planets.layouts[pCount][mappedIndex].scale
   if pCount == 1 then--apply additional scale bassed on the planet's radius
     --ratio of change from default radius (a planet with the default radius will not be get additional scale)
     local radScale = (pTable[index].radius/0.8) * 0.7 --Reduce the change
@@ -3483,18 +3497,49 @@ Planets.getScale = function(index, pTable)
 end
 
 Planets.getOffset = function(index, pTable)
-  pTable = pTable or (ActivePlayer.system and ActivePlayer.system.planets)
+  return Planets.getRawOffset(index, Planets._iFocus, pTable)
+  --[[pTable = pTable or (ActivePlayer.system and ActivePlayer.system.planets)
   if not pTable or not next(pTable) then return end
 
-  if Invasion.focus and Invasion.iFocus == index then --== pTable[index].name or
+  if Planets._displayedFocus and Planets._iFocus == index then --== pTable[index].name or
     return Planets.focusLayouts[1][1].x .. " " .. Planets.focusLayouts[1][1].y
   end
 
-  if Invasion.focus then index = Invasion.iFocus >= index and index or index -1 end
+  --if reading from the focusTable, planet indexes are shifted down by 1 (focus planet is removed from total planet count)
+  if Planets._displayedFocus then index = Planets._iFocus >= index and index or index -1 end
   local pCount = #pTable
-  local offX = Invasion.focus and Planets.focusLayouts[pCount][index].x or Planets.layouts[pCount][index].x
-  local offY = Invasion.focus and Planets.focusLayouts[pCount][index].y or Planets.layouts[pCount][index].y
+  local offX = Planets._displayedFocus and Planets.focusLayouts[pCount][index].x or Planets.layouts[pCount][index].x
+  local offY = Planets._displayedFocus and Planets.focusLayouts[pCount][index].y or Planets.layouts[pCount][index].y
+  return offX .. " " .. offY--]]
+end
+
+Planets.getRawOffset = function(index, proxyFocusIndex, pTable)
+  proxyFocusIndex = proxyFocusIndex and proxyFocusIndex > 0 and proxyFocusIndex or -1
+  if proxyFocusIndex == index then
+    return Planets.focusLayouts[1][1].x .. " " .. Planets.focusLayouts[1][1].y
+  end
+
+  pTable = pTable or (ActivePlayer.system and ActivePlayer.system.planets)
+  if not pTable or not next(pTable) then return end
+
+  local pCount = #pTable
+  local useFocusTable = proxyFocusIndex > 0
+  local mappedIndex = useFocusTable and Planets.mapPlanetIndexToFocusIndex(index, proxyFocusIndex, pCount) or index
+  local offX = useFocusTable and Planets.focusLayouts[pCount][mappedIndex].x or Planets.layouts[pCount][mappedIndex].x
+  local offY = useFocusTable and Planets.focusLayouts[pCount][mappedIndex].y or Planets.layouts[pCount][mappedIndex].y
   return offX .. " " .. offY
+end
+
+Planets.mapPlanetIndexToFocusIndex = function(planetIndex, focusIndex, planetCount)
+  assert(planetIndex and focusIndex and planetCount)
+  --Planet index is the index of the planet in its table. This index is used directly in Planets.layouts[i]
+  --FocusIndex[1] is not garranteed to represent PlanetIndex[1], Planets.focusLayouts[i] needs to be determined by which planet is currently in focus
+  local i = 1
+  if(planetCount > 2)then
+    i = planetIndex - focusIndex
+    if(planetIndex < focusIndex)then i = planetCount + i end
+  end
+  return i
 end
 
 --indexOrName of planet
@@ -3570,7 +3615,7 @@ Planets.setPlanet = function(index, planetData, pCount, params)
   end
 
   --else
-  local inFocus = Invasion.focus and index == Invasion.iFocus or false
+  local inFocus = Planets._displayedFocus and index == Planets._iFocus or false
   ui.batchSet(id, {active = true, offsetXY = params.offset or Planets.getOffset(index), scale = params.scale or Planets.getScale(index)})
   ui.batchSet(id.."_ColorRing", {active = true, interactable = true, color = Planets.getOwner(index)})
   ui.batchSet(id.."_Planet", {image = getPlanetImage(), color = (planetData.trait or planetData.name == "Mecatol Rex") and "White" or getFactionColor()})
@@ -3612,66 +3657,311 @@ Planets.eAnim = {
   --["idle"] = function() return "idle" end
 }
 
-Planets._iFocus = 1 -- the index of the currently focused planet in its system table
+------------
+--Defines the bezier curves that the planets move through
+local eBezTypes = {
+  SHIFT = function() return "SHIFT" end,
+  SWAP = function() return "SWAP" end,
+  JUMP = function() return "JUMP" end
+}
+--Bez[planetCount][BezType].getCurve(pIndex, +/-) --all values multiplied by 4.4
+local Bez = {
+  scaleMod = 4.4,
+  [1] = {},
+  [2] = {},
+  [3] = {
+    ["SHIFT"] = {
+      [1] = {0, -107},--Origin
+      [2] = {-79, -98},--O_HandleB
+      [3] = {-99, -16},--P1_HandleA
+      [4] = {-85, 1},--P1_Origin
+      [5] = {-119, 20},--P1_HandleB
+      [6] = {-62, 50},--FocusPosA_HandleA
+      [7] = {-41, 50},--FocusPosA_Origin
+      [8] = {-35, 63},--FocusPosA_HandleB
+      [9] = {-27, 93},--P2_HandleA
+      [10] = {29, 65},--P2_Origin
+      [11] = {37, 89},--P2_HandleB
+      [12] = {43, 76},--FocusPosB_HandleA
+      [13] = {47, 75},--FocusPosB_Origin
+      [14] = {59, 69},--FocusPosB_HandleB
+      [15] = {181, 46},--P3_HandleA
+      [16] = {53, -46},--P3_Origin
+      [17] = {46, -62},--P3_HandleB
+      [18] = {67, -106},--Origin_HandleA
+      [19] = {0, -107},--Origin
+    },
+    ["SWAP"] = {
+        [-2] = {47, 75},--Counterclockwise FB_Origin
+        [-1] = {128, 32},----Counterclockwise FB_HandleB
+        [0] = {163, -107},--Counterclockwise O_HandleA
+      [1] = {0, -107},--Origin
+      [2] = {-196, -52},--O_HandleB
+      [3] = {-136, 34},--FA_HandelA
+      [4] = {-41, 50},--FA_Origin
+      [5] = {-15, 87},--FA_HandleB
+      [6] = {-22, 112},--FB_HandleA
+      [7] = {47, 75},--FB_Origin
+      [8] = {128, 32},--FB_HandleB
+      [9] = {163, -107},--O_HandleA
+      [10]= {0, -107}--Origin
+    },
+    ["JUMP"] = {
+      [1] = {-85, 1}, --P1_Origin
+      [2] = {-43, 152},--P1_HandleA
+      [3] = {43, 78},--FB_HandleA
+      [4] = {47, 75},--FB_Origin
+
+      [5] = {29, 65},--P2_Origin
+      [6] = {192, -67},--P2_HandleA
+      [7] = {0, -107},--Origin_HandleA
+      [8] = {0, -107},--Origin
+
+      [9] = {53, -46},--P3_Origin
+      [10]= {-129, -83},--P3_HandleA
+      [11]= {-120, 58},--FA_HandelA
+      [12]= {-41, 50},--FA_Origin
+    },
+  },
+  [4] = {},
+  [5] = {}
+}
+
+Bez.getPath = function(planetCount, curveType, planetIndex, clockwise, oldFocus, newFocus)
+  assert(planetIndex and planetIndex > 0 and planetIndex <= planetCount, "Invalid planet index of "..(planetIndex or "nil_or_false"))
+  local path = {}
+  oldFocus = oldFocus or -1
+  newFocus = newFocus or -1
+
+  if(planetCount == 3)then
+    if(curveType == eBezTypes.SHIFT()) then
+      clockwise = clockwise and 1 or -1
+      local index = ((planetIndex -1) * 6) + 4
+      --?Shifting from focus or out of focus
+      if(oldFocus > 0) then index = index + (-clockwise*3) end
+      for i = 0, 3, 1 do
+        table.insert(path,{
+          Bez[3]["SHIFT"][index + (i*clockwise)][1]*Bez.scaleMod,
+          Bez[3]["SHIFT"][index + (i*clockwise)][2]*Bez.scaleMod,
+        })
+      end
+    elseif(curveType == eBezTypes.SWAP()) then
+      assert(oldFocus > 0)
+      oldFocus = oldFocus > 0 and oldFocus or 1 --Catch error scenario
+      --override clockwise, meesed up the value somewhere
+      local nextInTable = oldFocus + 1
+      if(nextInTable > planetCount)then nextInTable = 1 end
+      clockwise = newFocus == nextInTable and -1 or 1
+      --Use oldFocus to determine which planet index coresponds to each path index
+      --Path index: [1] = FocusPlanet, [2] = FocusPosA, [3] = FocusPosB
+      local mappedIndex = (planetIndex - oldFocus + 1)
+      if(planetIndex < oldFocus)then mappedIndex = 3 + mappedIndex end
+      local index = ((mappedIndex-1)*3)+ 1
+      --if(clockwise == -1 and mappedIndex == 1) then index = 10 end
+      print("P["..planetIndex.."] mapped to ["..mappedIndex.."]")
+      for i = 0, 3, 1 do
+        table.insert(path,
+        {
+          Bez[3]["SWAP"][index + (i*clockwise)][1]*Bez.scaleMod,--x
+          Bez[3]["SWAP"][index + (i*clockwise)][2]*Bez.scaleMod,--y
+        })
+      end
+    else --curveType == eBezTypes.JUMP()
+      assert(curveType == eBezTypes.JUMP())
+      clockwise = clockwise and 1 or -1
+      local index = 1+((planetIndex - 1)*4)
+      if(clockwise == -1) then index = index + 3 end
+      for i = 0, 3, 1 do
+        table.insert(path,{
+          Bez[3]["JUMP"][index +(i*clockwise)][1]*Bez.scaleMod,
+          Bez[3]["JUMP"][index +(i*clockwise)][2]*Bez.scaleMod,
+        })
+      end
+    end
+    return path
+  end
+
+  return {}
+end
+
+Bez.getCoef = function(planetCount, curveType, planetIndex, clockwise, oldFocus, newFocus)
+  --returns : {xCoef, yCoef} where xCoef = {#, #, #, #}
+  local coef = {{},{}}--x, y
+  local points = Bez.getPath(planetCount, curveType, planetIndex, clockwise, oldFocus, newFocus)
+  assert(#points == 4)
+  for xORy = 1, 2, 1 do
+    table.insert(coef[xORy], points[1][xORy])
+    table.insert(coef[xORy], (-3*points[1][xORy]) + (3*points[2][xORy]))
+    table.insert(coef[xORy], (3*points[1][xORy]) - (6*points[2][xORy]) + (3*points[3][xORy]))
+    table.insert(coef[xORy], -points[1][xORy] + (3*points[2][xORy]) - (3*points[3][xORy]) + points[4][xORy])
+  end
+  return coef
+end
+
+Bez.lerp = function(t, coef)
+  assert(coef and type(coef) == "table" and #coef == 4, "Malformed coefficients")
+  --Bezier curve expanded as Bernstien Polynomial coefficients, and factored as expressions of t^
+  return coef[1] + (t*coef[2]) + ((t*t)*coef[3]) + ((t*t*t)*coef[4])
+end
+
 Planets._displayedFocus = false
+--Planets._nextFocus = false
+Planets._iFocus = 0
+--Planets._iFocusNext = 0
 --params = {callback, skipAnimation, fast = bool}
 Planets.setFocus = function(params, disable)
   params = params or {}
+  disable = disable or not Invasion.focus
   local skipAnim = params.skipAnimation or Tac.disableAnimations
   local function tryCallback() if params.callback then params.callback() end end
 
   --Are we already displaying the current focus target?
   if (disable and not Planets._displayedFocus) or (not disable and Invasion.focus == Planets._displayedFocus) then tryCallback() return end
 
-  --Resolve focusUp or Down
-  if skipAnim then
-    Planets._displayedFocus = Invasion.focus
-    Planets.buildActiveSystem(tryCallback, skipAnim)
-    --ui.batchSet("Img_FocusBanner", {active = Invasion.focus and true and not disable})
-    local _isActive = Invasion.focus and true and not disable or false
-    ui.setShowing("Img_FocusBanner", _isActive, true)
-    return
-  end
-  --else
-
-  --Already have a different focus planet?--Quickly remove old focus
-  if Planets._displayedFocus and not disable then
-    --Planets.setFocus({callback = function() Planets.setFocus(params) end, skipAnimation = skipAnim, fast = true},"disable")
-  end
-  --[[
-  Planets.AnimState = disable and Planets.eAnim.focusDown() or Planets.eAnim.focusUp()
-  local _focusTarget = Invasion.focus
   local function onAnimComplete()
-    Planets._displayedFocus = _focusTarget
     Planets.AnimState = false
-
-    if Planets._displayedFocus ~= Invasion.focus and not params.ignoreMismatch then --A new focus was set during animation
-      Planets.setFocus({skipAnimation = true, callback = params.callback})
+    assert(Planets._displayedFocus == Invasion.focus, "Focus mismatch on complete")
+    if(Planets._displayedFocus ~= Invasion.focus) then
+      --Planets.setFocus(params)
       return
     end
+
+    local _isActive = Invasion.focus and not disable and true or false
+    ui.setShowing("Img_FocusBanner", _isActive, true)
+    --refresh planet UI
+    if(Planets._displayedSystem and Planets._displayedSystem.planets and #Planets._displayedSystem.planets > 0) then
+      local numPlanets = #Planets._displayedSystem.planets
+      for i = 1, numPlanets, 1 do
+        Planets.setPlanet(i, Planets._displayedSystem.planets[i], numPlanets, {isHS = Planets._displayedSystem.home})
+      end
+    end
+
+    print("\nPlanet anim complete:")
+    print("Displayed focus: ".. (Planets._displayedFocus or "none"))
+    print("Displayed index: ".. (Planets._iFocus or "nil"))
+    print("Focus: "..(Invasion.focus or "none"))
+    print("AnimState: "..(Planets.AnimState or "none"))
     tryCallback()
   end
 
-  Planets.Animator = Animate.newController()
-  Planets.Animator.onComplete = onAnimComplete
-  local co = coroutine.create(function()
-    local iTime = Time.time
-    local duration = fast and 0.3 or 1.2
-    local iPos = 0
-    local iScale = 0
-  end)
-  --Only activate buttons if Invasion.active is still true after animating
+  local function resolveAnim()
+    --Are we already animating? If so, do nothing, the new focus target will be set at the end of the current animation
+    if(Planets.AnimState) then return end
 
-  --Planets.Animator.addClip()
-  --Planets.Animator.run()
-  --]]
-  --temp
-  Planets.buildActiveSystem(tryCallback, skipAnim)
-  Planets._displayedFocus = Invasion.focus
-  --ui.batchSet("Img_FocusBanner", {active = Invasion.focus and true and not disable})
-  local _isActive = Invasion.focus and true and not disable or false
-  ui.setShowing("Img_FocusBanner", _isActive)
-  --^Temp
+    if Invasion.focus and Planets._displayedFocus and Planets._displayedFocus ~= Invasion.focus then
+      Planets.AnimState = Planets.eAnim.focusSwap()
+    elseif disable then
+      Planets.AnimState = Planets.eAnim.focusDown()
+    else
+      Planets.AnimState = Planets.eAnim.focusUp()
+    end
+    ---[[
+    --if Planets.Animator then Planets.Animator.stop() end
+    --Planets.Animator = Animate.newController()
+    --Planets.Animator.onComplete = onAnimComplete
+
+    local swapCo = function()
+      local iTime = Time.time
+      local duration = fast and 0.3 or 1.2
+      local iPos = 0
+      local iScale = 0
+      Planets._displayedFocus = Invasion.focus
+    end
+
+    local simpleCo = function()
+
+    end
+
+    local testCo = function()
+      local oldFocus = Planets._displayedFocus and Planets.getIndex(Planets._displayedFocus) or -1
+      local newFocus = Invasion.focus and Planets.getIndex(Invasion.focus) or -1
+      local numPlanets = 3
+
+      --get transition type
+      local curveType = eBezTypes.SHIFT()
+      if numPlanets == 2 then
+        curveType = (oldFocus > 0 and newFocus > 0) and eBezTypes.SWAP() or curveType
+      elseif numPlanets == 3 then
+        curveType = oldFocus ~= -1 and newFocus ~= -1 and eBezTypes.SWAP() or curveType
+        if( (oldFocus == 2 and newFocus == -1) or (newFocus == 2 and oldFocus == -1)) then curveType = eBezTypes.JUMP() end
+      end
+
+      --get rotation direction
+      local clockwise = true
+      if(numPlanets == 2)then
+        clockwise = newFocus == 2 or oldFocus == 1
+
+      elseif numPlanets == 3 then
+        if(newFocus == 1) then
+          clockwise = oldFocus == 2
+        elseif(newFocus == 2) then
+          clockwise = oldFocus ~= 1
+        elseif(newFocus == 3) then
+          clockwise = true
+        else --no new focus target
+          clockwise = oldFocus == 1
+        end
+      end
+
+      print("\n_______________\nBez Result:")
+      print("#P: "..numPlanets)
+      print("New Focus: ".. (newFocus ~= -1 and newFocus or "none"))
+      print("Old Focus: ".. (oldFocus ~= -1 and oldFocus or "none"))
+      print("Transition: "..curveType)
+      print("Clockwise: ".. (clockwise and "true" or "false"))
+      print("")
+
+      local curveCoefs = {}--{[p_i] ={[1-4]}} --4 points to define the curve of each planet's path
+      local scaleTargets = {}--{[p_i] = { {startingScale}, {targetScale}}}}
+      for i = 1, numPlanets, 1 do
+        table.insert(curveCoefs, Bez.getCoef(numPlanets, curveType, i, clockwise, oldFocus, newFocus))
+        table.insert(scaleTargets, {})
+        table.insert(scaleTargets[i], XML.scaleFromString(Planets.getRawScale(i, oldFocus)))--pre-focus pos
+        table.insert(scaleTargets[i], XML.scaleFromString(Planets.getRawScale(i, newFocus)))--post-focus pos
+      end
+      local duration = 1.6--0.40
+      local t1 = Time.time
+
+      while(Time.time - t1 <= duration) do
+        local percent = (Time.time - t1)/duration
+
+        for i = 1, numPlanets, 1 do
+          local pos = {Bez.lerp(Tween.smooth(percent), curveCoefs[i][1]), Bez.lerp(Tween.smooth(percent), curveCoefs[i][2])}
+          local scaleTween = i == oldFocus and Tween.easeOut(percent) or Tween.easeIn(percent)
+          local _scale = {
+            Tween.lerp(scaleTargets[i][1].x, scaleTargets[i][2].x, scaleTween),
+            Tween.lerp(scaleTargets[i][1].y, scaleTargets[i][2].y, scaleTween),
+          }
+          ui.batchSet("p"..i, {offsetXY = pos[1].." "..pos[2], scale = _scale[1] .." ".. _scale[2] .." 1"})
+        end
+
+        coroutine.yield(percent)
+      end
+
+      Planets._displayedFocus = newFocus ~= -1 and Planets.getName(newFocus) or false
+      Planets._iFocus = newFocus
+      return 1
+    end
+
+    --local co = coroutine.create(Planets.AnimState == Planets.eAnim.focusSwap() and swapCo or simpleCo)
+    local co = coroutine.create(testCo)
+    Coru.run(co, {callback = onAnimComplete})
+    --Only activate buttons if Invasion.active is still true after animating
+
+    --Planets.Animator.addClip()
+    --Planets.Animator.run()
+    --]]
+    --temp
+    --Planets.buildActiveSystem(tryCallback, skipAnim)
+  end
+
+  if skipAnim then
+    Planets._displayedFocus = Invasion.focus
+    Planets._iFocus = Planets.getIndex(Invasion.focus)
+    onAnimComplete()
+  else
+    resolveAnim()
+  end
 end
 
 Planets._nextSystem = false --or {callback, system, building}
@@ -6162,6 +6452,20 @@ end
 --returns = {x = #, y = #, z = #}
 XML.getScale = function(elementID)
   local scaleString = self.UI.getAttribute(elementID, "scale")
+  if not scaleString then return {x = 1, y = 1, z = 1} end
+
+  local result = {}
+  local _next = {"x","y","z"}
+  local _count = 1
+  for val in string.gmatch(scaleString, "(%-?%d+%.?%d*)") do
+    result[_next[_count]] = tonumber(val)
+    _count = _count + 1
+  end
+  return result
+end
+
+--returns = {x = #, y = #, z = #}
+XML.scaleFromString = function(scaleString)
   if not scaleString then return {x = 1, y = 1, z = 1} end
 
   local result = {}
