@@ -22,7 +22,7 @@ local _cmdToken = { --handels the floating command token object/animations
   guid = false,
   diffuse = "http://cloud-3.steamusercontent.com/ugc/2013722609377867963/0E05B3E0F2109C3779C15989F135C7D55AD0E490/",
   data = {
-    Nickname = "Auto-roller Command Token",
+    Nickname = "Tactician Activation Token",
     Description = "Drag & Drop me to activate a system, flip me to change who is activating",
     Tooltip = true,
     Grid = false,
@@ -3209,7 +3209,7 @@ Invasion.setActive = function(activate, skipAnimation)
   PShield.setEnabled(activate, activate)
   if activate then
     --first time opening for this system? Build the system
-    if not Planets._displayedSystem or (Planets._displayedSystem and Planets._displayedSystem ~= ActivePlayer.system) then
+    if not Planets._displayedSystem or (Planets._displayedSystem ~= ActivePlayer.system) then
       Invasion.setState(Invasion.eStates.Overview())
       Invasion.setFocus()
       Planets.buildActiveSystem(nil, skipAnimation)
@@ -3658,7 +3658,7 @@ Planets.eAnim = {
 }
 
 ------------
---Defines the bezier curves that the planets move through
+--Defines the bezier curves that the planets move along
 local eBezTypes = {
   SHIFT = function() return "SHIFT" end,
   SWAP = function() return "SWAP" end,
@@ -3667,63 +3667,190 @@ local eBezTypes = {
 --Bez[planetCount][BezType].getCurve(pIndex, +/-) --all values multiplied by 4.4
 local Bez = {
   scaleMod = 4.4,
-  [1] = {},
-  [2] = {},
-  [3] = {
+  [1] = {["SHIFT"] = {
+    [1] = {Planets.layouts[1][1].x/4.4, Planets.layouts[1][1].y/4.4},--
+    [2] = {Planets.layouts[1][1].x/4.4, Planets.layouts[1][1].y/4.4},--
+    [3] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},
+    [4] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},
+  }},
+  [2] = {
     ["SHIFT"] = {
-      [1] = {0, -107},--Origin
-      [2] = {-79, -98},--O_HandleB
-      [3] = {-99, -16},--P1_HandleA
-      [4] = {-85, 1},--P1_Origin
-      [5] = {-119, 20},--P1_HandleB
-      [6] = {-62, 50},--FocusPosA_HandleA
-      [7] = {-41, 50},--FocusPosA_Origin
-      [8] = {-35, 63},--FocusPosA_HandleB
-      [9] = {-27, 93},--P2_HandleA
-      [10] = {29, 65},--P2_Origin
-      [11] = {37, 89},--P2_HandleB
-      [12] = {43, 76},--FocusPosB_HandleA
-      [13] = {47, 75},--FocusPosB_Origin
-      [14] = {59, 69},--FocusPosB_HandleB
-      [15] = {181, 46},--P3_HandleA
-      [16] = {53, -46},--P3_Origin
-      [17] = {46, -62},--P3_HandleB
-      [18] = {67, -106},--Origin_HandleA
-      [19] = {0, -107},--Origin
+      [1] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--origin
+      [2] = {-29, -107},--O_HandleB
+      [3] = {-185, 0},--P1_HandleA
+      [4] = {Planets.layouts[2][1].x/4.4, Planets.layouts[2][1].y/4.4},--P1_Origin
+      [5] = {Planets.layouts[2][1].x/4.4, Planets.layouts[2][1].y/4.4},--P1_HandleB
+      [6] = {-29, 82},--F_HandleA
+      [7] = {Planets.focusLayouts[2][1].x/4.4, Planets.focusLayouts[2][1].y/4.4},--F_Origin
+      [8] = {37, 82},--F_HandleB
+      [9] = {144, 77},--P2_HandleA
+      [10]= {Planets.layouts[2][2].x/4.4, Planets.layouts[2][2].y/4.4},--P2_Origin
+      [11]= {88, -94},--P2_HandleB
+      [12]= {44, -136},--O_HandleA
+      [13]= {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--origin
     },
     ["SWAP"] = {
-        [-2] = {47, 75},--Counterclockwise FB_Origin
+      [-2] = {Planets.focusLayouts[2][1].x/4.4, Planets.focusLayouts[2][1].y/4.4},--F_Origin
+      [-1] = {192, 76},--F_HandleB
+      [0] = {96, -107},--O_HandleA
+      --Path on RightSie
+      [1] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--origin
+      --Path on left side
+      [2] = {-96, -107},--O_HandleB
+      [3] = {-192, 76},--F_HandleA
+      [4] = {Planets.focusLayouts[2][1].x/4.4, Planets.focusLayouts[2][1].y/4.4},--F_Origin
+    }
+  },
+  [3] = {
+    ["SHIFT"] = {
+      [1] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4}, --{0, -107},--Origin
+      [2] = {-79, -98},--O_HandleB
+      [3] = {-99, -16},--P1_HandleA
+      [4] = {Planets.layouts[3][1].x/4.4, Planets.layouts[3][1].y/4.4},--{-85, 1},--P1_Origin
+      [5] = {-119, 20},--P1_HandleB
+      [6] = {-62, 50},--FocusPosA_HandleA
+      [7] = {Planets.focusLayouts[3][1].x/4.4, Planets.focusLayouts[3][1].y/4.4},--{-41, 50},--FocusPosA_Origin
+      [8] = {-35, 63},--FocusPosA_HandleB
+      [9] = {-27, 93},--P2_HandleA
+      [10] = {Planets.layouts[3][2].x/4.4, Planets.layouts[3][2].y/4.4},--{29, 65},--P2_Origin
+      [11] = {37, 89},--P2_HandleB
+      [12] = {43, 76},--FocusPosB_HandleA
+      [13] = {Planets.focusLayouts[3][2].x/4.4, Planets.focusLayouts[3][2].y/4.4},--{47, 75},--FocusPosB_Origin
+      [14] = {59, 69},--FocusPosB_HandleB
+      [15] = {181, 46},--P3_HandleA
+      [16] = {Planets.layouts[3][3].x/4.4, Planets.layouts[3][3].y/4.4},--{53, -46},--P3_Origin
+      [17] = {46, -62},--P3_HandleB
+      [18] = {67, -106},--Origin_HandleA
+      [19] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4}--{0, -107},--Origin
+    },
+    ["SWAP"] = {
+        [-2] = {Planets.focusLayouts[3][2].x/4.4, Planets.focusLayouts[3][2].y/4.4},--Counterclockwise FB_Origin
         [-1] = {128, 32},----Counterclockwise FB_HandleB
         [0] = {163, -107},--Counterclockwise O_HandleA
-      [1] = {0, -107},--Origin
+      [1] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--Origin
       [2] = {-196, -52},--O_HandleB
       [3] = {-136, 34},--FA_HandelA
-      [4] = {-41, 50},--FA_Origin
+      [4] = {Planets.focusLayouts[3][1].x/4.4, Planets.focusLayouts[3][1].y/4.4},--FA_Origin
       [5] = {-15, 87},--FA_HandleB
       [6] = {-22, 112},--FB_HandleA
-      [7] = {47, 75},--FB_Origin
+      [7] = {Planets.focusLayouts[3][2].x/4.4, Planets.focusLayouts[3][2].y/4.4},--FB_Origin
       [8] = {128, 32},--FB_HandleB
       [9] = {163, -107},--O_HandleA
-      [10]= {0, -107}--Origin
+      [10]= {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--Origin
     },
     ["JUMP"] = {
-      [1] = {-85, 1}, --P1_Origin
+      [1] = {Planets.layouts[3][1].x/4.4, Planets.layouts[3][1].y/4.4}, --P1_Origin
       [2] = {-43, 152},--P1_HandleA
       [3] = {43, 78},--FB_HandleA
-      [4] = {47, 75},--FB_Origin
+      [4] = {Planets.focusLayouts[3][2].x/4.4, Planets.focusLayouts[3][2].y/4.4},--FB_Origin
 
-      [5] = {29, 65},--P2_Origin
+      [5] = {Planets.layouts[3][2].x/4.4, Planets.layouts[3][2].y/4.4},--P2_Origin
       [6] = {192, -67},--P2_HandleA
       [7] = {0, -107},--Origin_HandleA
-      [8] = {0, -107},--Origin
+      [8] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--Origin
 
-      [9] = {53, -46},--P3_Origin
+      [9] = {Planets.layouts[3][3].x/4.4, Planets.layouts[3][3].y/4.4},--P3_Origin
       [10]= {-129, -83},--P3_HandleA
       [11]= {-120, 58},--FA_HandelA
-      [12]= {-41, 50},--FA_Origin
+      [12]= {Planets.focusLayouts[3][1].x/4.4, Planets.focusLayouts[3][1].y/4.4},--FA_Origin
     },
   },
-  [4] = {},
+  [4] = {
+    ["SHIFT"] = {
+      [1] = {Planets.focusLayouts[4][1].x/4.4, Planets.focusLayouts[4][1].y/4.4},--PA
+      [2] = {-54, 65},--PA_HandleB
+      [3] = {-46, 70},--P1_HandleA
+      [4] = {Planets.layouts[4][1].x/4.4, Planets.layouts[4][1].y/4.4},--P1
+      [5] = {-41, 95},--P1_HandleB
+      [6] = {-37, 120},--PB_HandleA
+      [7] = {Planets.focusLayouts[4][2].x/4.4, Planets.focusLayouts[4][2].y/4.4},--PB
+      [8] = {21, 103},--PB_HandleB
+      [9] = {91, 139},--P2_HandleA
+      [10]= {Planets.layouts[4][2].x/4.4, Planets.layouts[4][2].y/4.4},--P2
+      [11]= {103, 28},--P2_HandleB
+      [12]= {80, 61},--PC_HandleA
+      [13]= {Planets.focusLayouts[4][3].x/4.4, Planets.focusLayouts[4][3].y/4.4},--PC
+      [14]= {133, 55},--PC_HandleB
+      [15]= {113, -38},--P3_HandleA
+      [16]= {Planets.layouts[4][3].x/4.4, Planets.layouts[4][3].y/4.4},--P3
+      [17]= {69, -102},--P3_HandleB
+      [18]= {40, -108},--PFocus_HandleA
+      [19]= {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--PFocus
+      [20]= {-40, -108},--PFocus_HandleB
+      [21]= {-97, -68},--P4_HandleA
+      [22]= {Planets.layouts[4][4].x/4.4, Planets.layouts[4][4].y/4.4},--P4
+      [23]= {-115, 16},--P4_HandleB
+      [24]= {-77, 56},--PA_HandleA
+      [25]= {Planets.focusLayouts[4][1].x/4.4, Planets.focusLayouts[4][1].y/4.4},--PA
+    },
+    ["SWAP"] = {
+      [1] = {Planets.focusLayouts[4][3].x/4.4, Planets.focusLayouts[4][3].y/4.4},--PC
+      [2] = {97, 50},--PC_HandleB
+      [3] = {163, -30},--PFocus_HandleA
+      [4] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--PFocus
+      [5] = {-163, -30},--PFocus_HandleB
+      [6] = {-94, 50},--PA_HandleA
+      [7] = {Planets.focusLayouts[4][1].x/4.4, Planets.focusLayouts[4][1].y/4.4},--PA
+      [8] = {-71, 83},--PA_HandleB
+      [9] = {-33, 128},--PB_HandleA
+      [10]= {Planets.focusLayouts[4][2].x/4.4, Planets.focusLayouts[4][2].y/4.4},--PB
+      [11]= {33, 128},--PB_HandleB
+      [12]= {73, 83},--PC_HandleA
+      [13]= {Planets.focusLayouts[4][3].x/4.4, Planets.focusLayouts[4][3].y/4.4},--PC
+    },
+    ["JUMP"] = {
+      --SHIFT_JUMP
+      --P1 to/from focus or FC
+      [1] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--PFocus
+      [2] = {-132, -52},--PFocus_HandleB
+      [3] = {-60, 58},--P1_HandleA
+      [4] = {Planets.layouts[4][1].x/4.4, Planets.layouts[4][1].y/4.4},--P1
+      [5] = {29, 146},--P1_HandleB
+      [6] = {56, 58},--PC_HandleA
+      [7] = {Planets.focusLayouts[4][3].x/4.4, Planets.focusLayouts[4][3].y/4.4},--PC
+      --P2 to/from FA or focus
+      [8] = {Planets.focusLayouts[4][1].x/4.4, Planets.focusLayouts[4][1].y/4.4},--PA
+      [9] = {11, 138},--PA_HandleB
+      [10] = {49, 62},--P2_HandleA
+      [11] = {Planets.layouts[4][2].x/4.4, Planets.layouts[4][2].y/4.4},--P2
+      [12] = {121, -20},--P2_HandleB
+      [13] = {51, -92},--PFocus_HandleA
+      [14] = {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--PFocus
+      --P3 to/from FB or FA
+      [15] = {Planets.focusLayouts[4][2].x/4.4, Planets.focusLayouts[4][2].y/4.4},--FB
+      [16] = {127, 118},--FB_HandleB
+      [17] = {93, -46},--P3_HandleA
+      [18] = {Planets.layouts[4][3].x/4.4, Planets.layouts[4][3].y/4.4},--P3
+      [19] = {-3, -96},--P3_HandleB
+      [20] = {-125, -72},--FA_HandleA
+      [21] = {Planets.focusLayouts[4][1].x/4.4, Planets.focusLayouts[4][1].y/4.4},--FA
+      --P4 to/from FC or FB
+      [22] = {Planets.focusLayouts[4][3].x/4.4, Planets.focusLayouts[4][3].y/4.4},--FC
+      [23] = {91, -104},--FC_HandleB
+      [24] = {-53, -64},--P4_HandleA
+      [25] = {Planets.layouts[4][4].x/4.4, Planets.layouts[4][4].y/4.4},--P4
+      [26] = {-87, -2},--P4_HandleB
+      [27] = {-101, 73},--FB_HandleA
+      [28] = {Planets.focusLayouts[4][2].x/4.4, Planets.focusLayouts[4][2].y/4.4},--FB
+
+      --SWAP_JUMP Focus to/from B, A to/from C
+      [31]= {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--PFocus
+      [32]= {-85, -72},--PFocus_HandleB
+      [33]= {-161, 100},--PB_HandleA
+      [34]= {Planets.focusLayouts[4][2].x/4.4, Planets.focusLayouts[4][2].y/4.4},--PB
+      [35]= {161, 100},--PB_HandleB
+      [36]= {85, -72},--PFocus_HandleA
+      [37]= {Planets.focusLayouts[1][1].x/4.4, Planets.focusLayouts[1][1].y/4.4},--PFocus
+
+      [38]= {Planets.focusLayouts[4][1].x/4.4, Planets.focusLayouts[4][1].y/4.4},--PA
+      [39]= {-37, 124},--PA_HandlB
+      [40]= {37, 124},--PC_HandleA
+      [41]= {Planets.focusLayouts[4][3].x/4.4, Planets.focusLayouts[4][3].y/4.4},--PC
+      [42]= {37, -62},--PC_HandleB
+      [43]= {-24, -62},--PA_HandleA
+      [44]= {Planets.focusLayouts[4][1].x/4.4, Planets.focusLayouts[4][1].y/4.4},--PA
+    }
+  },
   [5] = {}
 }
 
@@ -3733,7 +3860,37 @@ Bez.getPath = function(planetCount, curveType, planetIndex, clockwise, oldFocus,
   oldFocus = oldFocus or -1
   newFocus = newFocus or -1
 
-  if(planetCount == 3)then
+  if planetCount == 1 then
+    local index = oldFocus > 0 and 4 or 1
+    clockwise = oldFocus > 0 and -1 or 1
+    for i = 0, 3, 1 do
+      table.insert(path, {
+        Bez[1]["SHIFT"][index + (i*clockwise)][1]*Bez.scaleMod,
+        Bez[1]["SHIFT"][index + (i*clockwise)][2]*Bez.scaleMod,
+      })
+    end
+  elseif planetCount == 2 then
+    if(curveType == eBezTypes.SWAP())then
+      local index = planetIndex == oldFocus and 1 or (planetIndex == 1 and 4 or -2)
+      clockwise = clockwise and 1 or -1
+      for i = 0, 3, 1 do
+        table.insert(path, {
+          Bez[2]["SWAP"][index + (i*clockwise)][1]*Bez.scaleMod,
+          Bez[2]["SWAP"][index + (i*clockwise)][2]*Bez.scaleMod,
+        })
+      end
+    elseif(curveType == eBezTypes.SHIFT())then
+      clockwise = clockwise and 1 or -1
+      local index = planetIndex == 1 and 4 or 10
+      if(oldFocus > 0) then index = index + (-clockwise*3) end
+      for i = 0, 3, 1 do
+        table.insert(path,{
+          Bez[2]["SHIFT"][index + (i*clockwise)][1]*Bez.scaleMod,
+          Bez[2]["SHIFT"][index + (i*clockwise)][2]*Bez.scaleMod,
+        })
+      end
+    end
+  elseif planetCount == 3 then
     if(curveType == eBezTypes.SHIFT()) then
       clockwise = clockwise and 1 or -1
       local index = ((planetIndex -1) * 6) + 4
@@ -3778,17 +3935,74 @@ Bez.getPath = function(planetCount, curveType, planetIndex, clockwise, oldFocus,
         })
       end
     end
-    return path
+  elseif planetCount == 4 then
+    if(curveType == eBezTypes.SHIFT()) then
+      clockwise = clockwise and 1 or -1
+      local index = 4+((planetIndex-1)*6)
+      if(oldFocus > 0) then index = index + (-clockwise*3) end
+      for i = 0, 3, 1 do
+        table.insert(path,{
+          Bez[4]["SHIFT"][index + (i*clockwise)][1]*Bez.scaleMod,
+          Bez[4]["SHIFT"][index + (i*clockwise)][2]*Bez.scaleMod,
+        })
+      end
+    elseif(curveType == eBezTypes.SWAP())then
+      clockwise = clockwise and 1 or -1
+      --Any planet could be in any focus position
+      --Map planetIndex to focusIndex: fIndex = [1] = Focus, [2] = A, [3] = B,
+      local index = planetIndex - oldFocus + 1
+      if index < 1 then index = index + 4 end
+      --Now map this index to the data table
+      if(index == 4) then
+        index = clockwise == 1 and 1 or 13
+      else
+        index = (index*3) + 1
+      end
+      for i = 0, 3, 1 do
+        table.insert(path, {
+          Bez[4]["SWAP"][index +(i*clockwise)][1]*Bez.scaleMod,
+          Bez[4]["SWAP"][index +(i*clockwise)][2]*Bez.scaleMod
+        })
+      end
+    else assert(curveType == eBezTypes.JUMP(), "Invalid curveType: ".. (curveType and curveType or "nil"))
+      clockwise = clockwise and 1 or -1
+      local index = 1
+      --Is this a SHIFT_JUMP or a SWAP_JUMP?
+      if(oldFocus > 0 and newFocus > 0) then --SWAP_JUMP
+        clockwise = (oldFocus == 1 or oldFocus == 4) and 1 or -1
+        if(planetIndex%2 == oldFocus%2)then --Swap focus and B
+          index = planetIndex == newFocus and 34 or 34 + (-clockwise*3)
+        else --Swap A and C
+          if(oldFocus == 3 or oldFocus == 2) then
+            index = planetIndex < oldFocus and 41 or 41 + (-clockwise*3)
+          else
+            local tempF = oldFocus == 4 and 2 or 3
+            index = planetIndex > tempF and 41 or 41 + (-clockwise*3)
+          end
+        end
+      else --SHIFT_JUMP
+        index = ((planetIndex-1)*7)+4
+        if oldFocus > 0 then index = index + (-clockwise*3) end
+      end
+
+      for i = 0, 3, 1 do
+        table.insert(path, {
+          Bez[4]["JUMP"][index +(i*clockwise)][1]*Bez.scaleMod,
+          Bez[4]["JUMP"][index +(i*clockwise)][2]*Bez.scaleMod
+        })
+      end
+    end
+  else assert(planetCount == 5)
   end
 
-  return {}
+  return path
 end
 
 Bez.getCoef = function(planetCount, curveType, planetIndex, clockwise, oldFocus, newFocus)
   --returns : {xCoef, yCoef} where xCoef = {#, #, #, #}
   local coef = {{},{}}--x, y
   local points = Bez.getPath(planetCount, curveType, planetIndex, clockwise, oldFocus, newFocus)
-  assert(#points == 4)
+  assert(#points == 4, "Malformed path")
   for xORy = 1, 2, 1 do
     table.insert(coef[xORy], points[1][xORy])
     table.insert(coef[xORy], (-3*points[1][xORy]) + (3*points[2][xORy]))
@@ -3855,42 +4069,35 @@ Planets.setFocus = function(params, disable)
     else
       Planets.AnimState = Planets.eAnim.focusUp()
     end
-    ---[[
-    --if Planets.Animator then Planets.Animator.stop() end
-    --Planets.Animator = Animate.newController()
-    --Planets.Animator.onComplete = onAnimComplete
 
-    local swapCo = function()
-      local iTime = Time.time
-      local duration = fast and 0.3 or 1.2
-      local iPos = 0
-      local iScale = 0
-      Planets._displayedFocus = Invasion.focus
-    end
-
-    local simpleCo = function()
-
-    end
-
-    local testCo = function()
+    local co = coroutine.create(function()
       local oldFocus = Planets._displayedFocus and Planets.getIndex(Planets._displayedFocus) or -1
       local newFocus = Invasion.focus and Planets.getIndex(Invasion.focus) or -1
-      local numPlanets = 3
+      local numPlanets = Planets._displayedSystem.planets and #Planets._displayedSystem.planets or 0
+      if(numPlanets == 0) then
+        Planets._displayedFocus = newFocus ~= -1 and Planets.getName(newFocus) or false
+        Planets._iFocus = newFocus
+        return
+      end
 
       --get transition type
-      local curveType = eBezTypes.SHIFT()
-      if numPlanets == 2 then
-        curveType = (oldFocus > 0 and newFocus > 0) and eBezTypes.SWAP() or curveType
-      elseif numPlanets == 3 then
-        curveType = oldFocus ~= -1 and newFocus ~= -1 and eBezTypes.SWAP() or curveType
+      local curveType = oldFocus ~= -1 and newFocus ~= -1 and eBezTypes.SWAP() or eBezTypes.SHIFT()
+      if numPlanets == 3 then
         if( (oldFocus == 2 and newFocus == -1) or (newFocus == 2 and oldFocus == -1)) then curveType = eBezTypes.JUMP() end
+      elseif numPlanets == 4 then
+        if(oldFocus > 0 and newFocus > 0) then
+          if(newFocus%2 == oldFocus%2) then
+            curveType = eBezTypes.JUMP()
+          end
+        elseif((oldFocus < 1 and (newFocus == 1 or newFocus == 2)) or (newFocus < 1 and (oldFocus == 1 or oldFocus == 2))) then
+          curveType = eBezTypes.JUMP()
+        end
       end
 
       --get rotation direction
       local clockwise = true
       if(numPlanets == 2)then
         clockwise = newFocus == 2 or oldFocus == 1
-
       elseif numPlanets == 3 then
         if(newFocus == 1) then
           clockwise = oldFocus == 2
@@ -3900,6 +4107,15 @@ Planets.setFocus = function(params, disable)
           clockwise = true
         else --no new focus target
           clockwise = oldFocus == 1
+        end
+      elseif numPlanets == 4 then
+        --SHIFT case (including JUMP shifts)
+        if(oldFocus > 0 and newFocus < 1) or (oldFocus < 1 and newFocus > 0) then
+          clockwise = (newFocus == 2 or newFocus == 3 or oldFocus == 1 or oldFocus == 4)
+        else --SWAP case (including JUMP swaps)
+          local i_test = newFocus + 1
+          if(i_test == 5) then i_test = 1 end
+          clockwise = i_test == oldFocus
         end
       end
 
@@ -3919,7 +4135,7 @@ Planets.setFocus = function(params, disable)
         table.insert(scaleTargets[i], XML.scaleFromString(Planets.getRawScale(i, oldFocus)))--pre-focus pos
         table.insert(scaleTargets[i], XML.scaleFromString(Planets.getRawScale(i, newFocus)))--post-focus pos
       end
-      local duration = 1.6--0.40
+      local duration = 0.46
       local t1 = Time.time
 
       while(Time.time - t1 <= duration) do
@@ -3932,7 +4148,16 @@ Planets.setFocus = function(params, disable)
             Tween.lerp(scaleTargets[i][1].x, scaleTargets[i][2].x, scaleTween),
             Tween.lerp(scaleTargets[i][1].y, scaleTargets[i][2].y, scaleTween),
           }
+
           ui.batchSet("p"..i, {offsetXY = pos[1].." "..pos[2], scale = _scale[1] .." ".. _scale[2] .." 1"})
+          if(i == oldFocus or i == newFocus) then
+            local id = "p"..i
+            if(Planets._displayedSystem.planets[i].trait) then
+              local lerpFunc = i == oldFocus and Tween.easeOut or Tween.easeIn
+              local y_lerped = Tween.lerp(i == oldFocus and Planets.traits.data.focusOffset or Planets.traits.data.offset, i == newFocus and Planets.traits.data.focusOffset or Planets.traits.data.offset, lerpFunc(percent))
+              ui.batchSet(id.."_Trait", { offsetXY = "0 " .. y_lerped})
+            end
+          end
         end
 
         coroutine.yield(percent)
@@ -3941,10 +4166,7 @@ Planets.setFocus = function(params, disable)
       Planets._displayedFocus = newFocus ~= -1 and Planets.getName(newFocus) or false
       Planets._iFocus = newFocus
       return 1
-    end
-
-    --local co = coroutine.create(Planets.AnimState == Planets.eAnim.focusSwap() and swapCo or simpleCo)
-    local co = coroutine.create(testCo)
+    end)
     Coru.run(co, {callback = onAnimComplete})
     --Only activate buttons if Invasion.active is still true after animating
 
