@@ -1,5 +1,6 @@
 --[[ Lua code. See documentation: http://berserk-games.com/knowledgebase/scripting/ --]]
 
+--Phase is NOT saved between loads
 local _currentPhase = "SETUP" --"SETUP|DRAFT|STRATEGY|ACTION|AGENDA"
 local _phases = {
   ["SETUP"] = 0, ["DRAFT"] = 1, ["STRATEGY"] = 2, ["ACTION"] = 3, ["AGENDA"] = 1,--phaseName to nextPhase index

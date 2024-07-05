@@ -1048,21 +1048,13 @@ function checkCardForToken(object_spawned, planetName)
 end
 
 -------------------------------------------------------------------------------
-local _explorableSystemsThisFrame = false
+
+--Removed cached system table: cache did not included injected or modified systems. The cache was a copy of a stable table so lets just read from it
 function isExplorable(object)
 
     local switch = {
       ['Generic'] = function()
-        if _tokenPlanets[object.getName()] then return true end
-
-        if not _explorableSystemsThisFrame then
-          Wait.frames(function() _explorableSystemsThisFrame = false end, 1)
-          _explorableSystemsThisFrame = {}
-          for guid, _ in pairs(_systemHelper.systems()) do
-            _explorableSystemsThisFrame[guid] = true
-          end
-        end
-        if _explorableSystemsThisFrame[object.getGUID()] then return true end
+        return (_tokenPlanets[object.getName()] or _systemHelper.systems()[object.getGUID()]) and true or false
       end,
       ['Tile'] = function()
         local name = object.getName()
