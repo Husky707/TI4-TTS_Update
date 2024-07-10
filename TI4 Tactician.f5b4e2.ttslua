@@ -1565,7 +1565,6 @@ Bez.getPath = function(planetCount, curveType, planetIndex, clockwise, oldFocus,
       if(planetIndex < oldFocus)then mappedIndex = 3 + mappedIndex end
       local index = ((mappedIndex-1)*3)+ 1
       --if(clockwise == -1 and mappedIndex == 1) then index = 10 end
-      print("P["..planetIndex.."] mapped to ["..mappedIndex.."]")
       for i = 0, 3, 1 do
         table.insert(path,
         {
@@ -1887,13 +1886,13 @@ ui.generateXML = function(callback)
     show = {
       clip = uiClips.slideIn_Up,
       onStop = uiClips.revertSlide,
-      params = {duration = 0.4, magnitude = {x = 0, y = -260}, padding = 1, lerp = Tween.easeOut},
+      params = {from = {x = 0, y = 0, z = 0}, duration = 0.4, magnitude = {x = 0, y = -260}, padding = 1, lerp = Tween.easeOut},
       --delay = 0.1
     },
     hide = {
       clip = uiClips.slideOut_Down,
       onStop = uiClips.revertSlide,
-      params = {duration = 0.12, magnitude = {x = 0, y = -320}, padding = 1, lerp = Tween.linear},
+      params = {from = {x = 0, y = 0, z = 0}, duration = 0.12, magnitude = {x = 0, y = -320}, padding = 1, lerp = Tween.linear},
     }
   })
 
@@ -3285,7 +3284,9 @@ Tac.onGameEvent = function(event, params)
     _cmdToken.animateActivation(function()
       --after animation, maybe set state to movement
       if not Tac.inStateTransition then
-        if Tac.State == Tac.eStates.Invasion() or Tac.State == Tac.eStates.SpaceCombat() then
+        if Tac.State == Tac.eStates.Invasion() then
+          Invasion.onSystemActivated()
+        elseif Tac.State == Tac.eStates.SpaceCombat() or Tac.State == Tac.eStates.Movement() then
           Tac.updateActiveState()
         else
           Tac.setState(Tac.eStates.Movement())
@@ -3574,17 +3575,6 @@ Invasion.eStates = {
 }
 
 -------State machine
-Invasion.reset = function()
-  Invasion.setContext()
-  Invasion.setFocus()
-  --update active system data
-  Invasion.setState(Invasion.eStates.Overview())
-  Invasion.setActive(Tac.State == Tac.eStates.Invasion())
-  Plasma.setTarget("default")
-  PShield.update()
-  --Planets.buildActiveSystem()
-end
-
 Invasion.setActive = function(activate, skipAnimation)
   activate = activate and true or false
   --if Invasion.active == activate then return end
@@ -3616,7 +3606,6 @@ Invasion.setActive = function(activate, skipAnimation)
     else --Keep current focus and context
       Invasion.setState(Invasion.eStates.Overview())
       Invasion.showContextButtons()
-      Invasion.showFocusButtons()
       Planets.buildActiveSystem(nil, skipAnimation)
     end
   end
@@ -3699,46 +3688,67 @@ Invasion.closeActiveState = function(params)
   switch[try]()
 end
 
---unimplemetned
-Invasion.onSystemActivated = function()
+Invasion.reset = function()
+  if Invasion.active ~= (Tac.State == Tac.eStates.Invasion()) then
+    Invasion.setActive(Tac.State == Tac.eStates.Invasion(), true)
+    return
+  end
   if not Invasion.active then return end
 
-  --first time opening for this system? Build the system
-  if not Planets._displayedSystem or (Planets._displayedSystem and Planets._displayedSystem ~= ActivePlayer.system) then
+  if not ActivePlayer.system and Planets._displayedSystem then
+    Planets._nextSystem = false
+    Planets._clearBuiltSystem()
+    return
+  end
+
+  local function goToOverview()
     Invasion.setState(Invasion.eStates.Overview())
-    Invasion.setFocus()
-    Planets.buildActiveSystem()
-  else --Keep current focus and context
-    Invasion.setState(Invasion.eStates.Overview())
-    Invasion.showContextButtons()
-    Invasion.showFocusButtons()
-    Planets.buildActiveSystem()
+    Plasma.setTarget("default")
+    PShield.update()
+  end
+  Planets.buildActiveSystem(true, function() Invasion.setFocus(nil, nil, goToOverview) end)
+end
+
+Invasion.onSystemActivated = function()
+  if not Invasion.active or not ActivePlayer.system then return end
+
+  if areSystemsEqual(Planets._displayedSystem, ActivePlayer.system) then
+    local function goToOverview()
+      Invasion.setState(Invasion.eStates.Overview())
+    end
+    Invasion.setFocus(nil, nil, goToOverview)
+  else --first time opening for this system? Build the system
+    if Invasion.focus then
+      Invasion.setFocus(nil, nil, function() Planets.buildActiveSystem() end)
+    else
+      Planets.buildActiveSystem()
+    end
   end
 end
 
 -------Context and Focus
 Invasion.focus = false --or planetName
-Invasion.setFocus = function(pIndex, skipAnimation) --index of the planet in its system's "planets" table
+Invasion.setFocus = function(pIndex, skipAnimation, callback) --index of the planet in its system's "planets" table
   local target = pIndex and Planets.getName(pIndex) or false
+  local function tryCallback() if callback then callback() end end
 
   --Removing focus, but already dont have one
-  if(not target and not Invasion.focus) then return end
+  if(not target and not Invasion.focus) then tryCallback() return end
 
   --Repeated setting a target removes that target from focus like a toggle
   if(target == Invasion.focus) then target = false end
 
   if target then --validate the target planet
     --Check active system has a planet to focus
-    if not ActivePlayer.system or not ActivePlayer.system.planets or not next(ActivePlayer.system.planets) then return end
+    if not ActivePlayer.system or not ActivePlayer.system.planets or not next(ActivePlayer.system.planets) then tryCallback() return end
     --Check target is in active system
     local inSystem = false
     for _,each in ipairs(ActivePlayer.system.planets) do
       if each.name == target then inSystem = true break end
     end
-    if not inSystem then return end
+    if not inSystem then tryCallback() return end
   end
 
---!Move to Planets section
   local function onFocusChangeComplete()
     local fBool = Invasion.focus and true or false
     if fBool then
@@ -3755,19 +3765,11 @@ Invasion.setFocus = function(pIndex, skipAnimation) --index of the planet in its
     end
     ui.batchSet("Hex_FocusNameplate", {active = fBool})
     ui.batchSet("SmartBtn_SpaceCannonDef", {color = Planets.getFocusOrUniformOwner()})
+    if callback then callback() end
   end
 
   Invasion.focus = target
   Planets.setFocus({callback = onFocusChangeComplete, skipAnimation = skipAnimation}, not target)
-end
-
---!unimplemented
-Invasion.showFocusButtons = function(hide)
-  hide = hide and true or false
-  local show = not hide
-  if show and not Invasion.foucs then return end
-
-  --ui.batchSet("", {active = show, interactable = show})
 end
 
 --Context refers to the "Context Button" that appears at the base of the hex
@@ -3823,10 +3825,14 @@ Invasion.animator = false
 Invasion.animateOrbitals = function(orbit, reverse)
 end
 
+function areSystemsEqual(system_A, system_B)
+  return (system_A and type(system_A) == "table" and system_A.guid or -1) == (system_B and type(system_B) == "table" and system_B.guid or -1)
+end
+
 --target = #index or string name of xml planet id {p1, p2,... p5}
 --fromSystem defaults to the active system
 Planets.getName = function(target, fromSystem)
-  fromSystem = fromSystem or ActivePlayer.system
+  fromSystem = fromSystem or Planets._displayedSystem
   if not fromSystem or not fromSystem.planets or not next(fromSystem.planets) then return nil end
   local switch = {
     ["p1"] = 1, ["p2"] = 2, ["p3"] = 3, ["p4"] = 4, ["p5"] = 5,
@@ -3836,7 +3842,7 @@ Planets.getName = function(target, fromSystem)
 end
 
 Planets.getIndex = function(pName, fromSystem)
-  fromSystem = fromSystem or ActivePlayer.system
+  fromSystem = fromSystem or Planets._displayedSystem
   if not fromSystem or not fromSystem.planets or not next(fromSystem.planets) then return nil end
   for i,each in ipairs(fromSystem.planets) do
     if pName == each.name then return i end
@@ -3878,7 +3884,7 @@ Planets.getRawScale = function(index, proxyFocusIndex, pTable)
     return "" .. scale .. " " .. scale .. " 1"
   end
 
-  pTable = pTable or (ActivePlayer.system and ActivePlayer.system.planets)
+  pTable = pTable or (Planets._displayedSystem and Planets._displayedSystem.planets)
   if not pTable or not next(pTable) then return end
   local pCount = #pTable
   local useFocusTable = proxyFocusIndex > 0
@@ -3917,7 +3923,7 @@ Planets.getRawOffset = function(index, proxyFocusIndex, pTable)
     return Planets.focusLayouts[1][1].x .. " " .. Planets.focusLayouts[1][1].y
   end
 
-  pTable = pTable or (ActivePlayer.system and ActivePlayer.system.planets)
+  pTable = pTable or (Planets._displayedSystem and Planets._displayedSystem.planets)
   if not pTable or not next(pTable) then return end
 
   local pCount = #pTable
@@ -3944,7 +3950,7 @@ end
 --pTable = table of all planets in this system *optional, defaults to active system
 Planets.getOwner = function(indexOrName, pTable)
   local function nameFromIndex()
-    pTable = pTable or (ActivePlayer.system and ActivePlayer.system.planets)
+    pTable = pTable or (Planets._displayedSystem and Planets._displayedSystem.planets)
     assert(pTable, "To get a planet's ownerColor by that planet's index, you must provide the .planets table from the planet's system.")
     if not pTable or not next(pTable) or indexOrName <= 0 or indexOrName > #pTable then return "Grey" end
 
@@ -3962,7 +3968,7 @@ end
 --gets the owner color of the only planet in a system
 Planets.getFocusOrSoloOwner = function()
   if Invasion.focus then return Planets.getOwner(Invasion.focus) end
-  local planets = ActivePlayer.system and ActivePlayer.system.planets or false
+  local planets = Planets._displayedSystem and Planets._displayedSystem.planets or false
   return planets and #planets == 1 and Planets.getOwner(planets[1].name) or "Grey"
 end
 
@@ -3970,8 +3976,8 @@ end
 Planets.getFocusOrUniformOwner = function(includeUncontrolledPlanets)
   local color = Planets.getFocusOrSoloOwner()
   --see if all planets in the system are owned by the same player (maybe ignoring uncontrolled grey planet owners)
-  if color == "Grey" and ActivePlayer.system then
-    local planets = ActivePlayer.system.planets or {}
+  if color == "Grey" and Planets._displayedSystem then
+    local planets = Planets._displayedSystem.planets or {}
     local allSame = "init"
     for _,each in ipairs(planets) do
       local owner = Planets.getOwner(each.name)
@@ -4044,7 +4050,7 @@ Planets.setPlanet = function(index, planetData, pCount, params)
   })
 end
 
-Planets.Animator = false
+Planets._runningCos = {} --table of coroutine refs
 Planets.AnimState = false --Building, clearing, focusUp, focusDown
 Planets.eAnim = {
   ["clearing"]  = function() return "clearing"  end,
@@ -4069,7 +4075,7 @@ Planets.setFocus = function(params, disable)
   if (disable and not Planets._displayedFocus) or (not disable and Invasion.focus == Planets._displayedFocus) then tryCallback() return end
 
   --Prevent animating while Invasion is hidden or while already animating
-  if not Invasion.active or Planets.AnimState then tryCallback() return end
+  if not Invasion.active or (not disable and Planets.AnimState) or (disable and Planets.AnimState and Planets.AnimState ~= Planets.eAnim.clearing) then tryCallback() return end
 
   local function onAnimComplete()
     Planets.AnimState = false
@@ -4089,17 +4095,12 @@ Planets.setFocus = function(params, disable)
       end
     end
 
-    print("\nPlanet anim complete:")
-    print("Displayed focus: ".. (Planets._displayedFocus or "none"))
-    print("Displayed index: ".. (Planets._iFocus or "nil"))
-    print("Focus: "..(Invasion.focus or "none"))
-    print("AnimState: "..(Planets.AnimState or "none"))
     tryCallback()
   end
 
   local function resolveAnim()
     --Are we already animating? If so, do nothing, the new focus target will be set at the end of the current animation
-    if(Planets.AnimState) then return end
+    if(Planets.AnimState == Planets.eAnim.focusSwap() or Planets.AnimState == Planets.eAnim.focusDown() or Planets.AnimState == Planets.eAnim.focusUp()) then return end
 
     if Invasion.focus and Planets._displayedFocus and Planets._displayedFocus ~= Invasion.focus then
       Planets.AnimState = Planets.eAnim.focusSwap()
@@ -4161,14 +4162,6 @@ Planets.setFocus = function(params, disable)
           clockwise = i_test == oldFocus
         end
       end
-
-      print("\n_______________\nBez Result:")
-      print("#P: "..numPlanets)
-      print("New Focus: ".. (newFocus ~= -1 and newFocus or "none"))
-      print("Old Focus: ".. (oldFocus ~= -1 and oldFocus or "none"))
-      print("Transition: "..curveType)
-      print("Clockwise: ".. (clockwise and "true" or "false"))
-      print("")
 
       local curveCoefs = {}--{[p_i] ={[1-4]}} --4 points to define the curve of each planet's path
       local scaleTargets = {}--{[p_i] = { {startingScale}, {targetScale}}}}
@@ -4241,10 +4234,18 @@ Planets.setFocus = function(params, disable)
       end
 
       if newFocus > 0 then ui.setShowing("Img_FocusBanner", true) end
-
       return 1
     end)
-    Coru.run(co, {callback = onAnimComplete})
+    table.insert(Planets._runningCos, co)
+    Coru.run(co, {callback = function()
+      for i,eachCo in ipairs(Planets._runningCos) do
+        if eachCo == co then
+          table.remove(Planets._runningCos, i)
+          break
+        end
+      end
+      onAnimComplete()
+    end})
   end
 
   if skipAnim then
@@ -4262,35 +4263,15 @@ Planets.buildSystem = function(system, callback, skipAnimation)
   local function tryCallback() if callback then callback() end end
 
   local function onBuildComplete()
-    if Planets._displayedSystem ~= Planets._nextSystem.system then
-      print("Build complete error")
-      --close and build?
-      tryCallback()
+    Planets.AnimState = false
+    if not areSystemsEqual(Planets._displayedSystem, Planets._nextSystem) then
+      --print("Build complete error")
+      Planets.buildSystem(Planets._nextSystem.system, Planets._nextSystem.callbck, skipAnimation)
       return
     end
-
     Planets._nextSystem = false
-    PShield.updateUI(skipAnimation)
-    tryCallback()
-  end
 
-  local function onSystemCleared()
-    if not Planets._nextSystem then
-      print("Error clearing system")
-      --set/animate orbitals for empty
-      tryCallback()
-      return
-    end
-    ---else
-    local target = Planets._nextSystem.system
-    Planets._displayedSystem = target
-    Planets._nextSystem.building = true
-
-    --enable red corners for hazardous systems
-    if Planets._nextSystem.system and Planets._nextSystem.system.anomalies and #Planets._nextSystem.system.anomalies >= 1 then
-      ui.batchSet("Hex_Anamoly", {active = true})
-    end
-
+    local target = Planets._displayedSystem
     if target.planets and #target.planets >= 1 then
       local numPlanets = #target.planets
       for i = 1, numPlanets, 1 do
@@ -4298,15 +4279,38 @@ Planets.buildSystem = function(system, callback, skipAnimation)
       end
     end
 
-    --Animate planet entry or skip to complete
+    --enable red corners for hazardous systems
+    if Planets._displayedSystem and Planets._displayedSystem.anomalies and #Planets._displayedSystem.anomalies >= 1 then
+      ui.batchSet("Hex_Anamoly", {active = true})
+    end
 
-    onBuildComplete()
+    PShield.updateUI(skipAnimation)
+    tryCallback()
+  end
+
+  local function onSystemCleared()
+    if not Planets._nextSystem.system then
+      --Maybe create a default empty system
+      Planets._displayedSystem = false
+      onBuildComplete()
+      return
+    end
+
+    --Animate planet entry or skip to onComplete
+    local animNotImplemented = true
+    if skipAnimation or animNotImplemented then
+      Planets._displayedSystem = Planets._nextSystem.system
+      onBuildComplete()
+    else --(animate)
+      Planets._nextSystem.building = true
+      Planets.AnimState = Planets.eAnim.building()
+    end
   end
 
   --building/clearing may take time, prevent call stacking
-  if Planets._nextSystem then Planets._nextSystem = {callback = callback, system = system, building = Planets._nextSystem.building} return end
-  Planets._nextSystem = {callback = callback, system = system, building = false}
-  if Planets._displayedSystem == system then --Quickly update system if we are rebuilding the currently displayed system
+  if Planets._nextSystem then Planets._nextSystem = {callback = callback, system = system, guid = system and system.guid or -1, building = Planets._nextSystem.building} return end
+  Planets._nextSystem = {callback = callback, system = system, guid = system and system.guid or -1, building = false}
+  if areSystemsEqual(Planets._displayedSystem, system) then --Quickly update system if we are rebuilding the currently displayed system
     skipAnimation = true
     onSystemCleared()
   else
@@ -4320,13 +4324,13 @@ end
 Planets._clearBuiltSystem = function(callback, skipAnimation)
   if not Planets._displayedSystem then if callback then callback() end return end
   skipAnimation = skipAnimation or Tac.disableAnimations or false
-  --maybe stop running build animation
-  --Clear focus
 
   local function onClearComplete()
+    Planets.AnimState = false
     ui.batchSet("Hex_Anamoly", {active = false})
 
-    for i = 1, 5, 1 do --hide planets
+    --hide planets
+    for i = 1, 5, 1 do
       Planets.setPlanet(i)
     end
 
@@ -4335,24 +4339,18 @@ Planets._clearBuiltSystem = function(callback, skipAnimation)
   end
 
   local function resolveAnimation()
-    --Planets.AnimState = Planets.eAnim.clearing()
-    --clearFocus
-    --Planets.animateFocus(callback, close, fast or skip)
-    --Planets.animate(close, noSkip, callback)
-
-    --temp
+    Planets.AnimState = Planets.eAnim.clearing()
+    for _,eachCo in ipairs(Planets._runningCos) do
+      Coru.stop(eachCo)
+    end
+    Planets._runningCos = {}
+    --Planet extit and re-entry animations go here...
     onClearComplete()
   end
 
   if skipAnimation then onClearComplete()
   else resolveAnimation()
   end
-end
-
---Sets the currently displayed system to the default empty system
-Planets.clearSystem = function(callback, skipAnimation)
-  if not Planets._displayedSystem then if callback then callback() end return end
-  Planets.buildSystem({tile = -1, planets = {}}, callback, skipAnimation)
 end
 
 Planets._cache = {}--[pName] = cardObj

@@ -38,12 +38,12 @@ end
 
 -- Systems table, from guid to systems.
 --
--- System attributes:
+-- System attributes (non-comprehensive. See injection):
 -- - source = "stringName"
 -- - tile: number, for large system sets,consider choosing a prefix number, then have each system be a decimal increment of that prefix: 8000.00, 8000.01, 8000.02 ...
 -- - home: boolean, true if a home system.
--- - faction: "nameOfFactionOrAbility", links the system to a faction or abiltiy
--- - planets: list of planet tables.
+-- - faction: "nameOfFactionOrAbility", links the system to a faction or abiltiy. Also removes it from draft pool.
+-- - planets: {}, list of planet tables *see below.
 -- - wormholes: list of strings.
       --wormholes_faceUp|wormholes_faceDown: lists of strings(Mallice)
 -- - anomalies: list of strings.
@@ -65,8 +65,8 @@ end
 -- Also computed:
 -- - system.guid: tile GUID.
 -- - system.zoneEdgePositions: local edge positions carving per-planet zones.
--- - system.planets[].position: local {xyz} position.
--- - system.planets[].radius: local space.
+-- - system.planets[x].position: local {xyz} position.
+-- - system.planets[x].radius: local space.
 --
 local _systems = {
     ['e06224'] = { tile = 1, home = true, planets = {
@@ -952,11 +952,11 @@ end
 
 --Injection----------------------------------------------------------------------
 
---[[System table attributes:
+--[[System table attributes (detailed):
 local systemFormat = {
   source = "stringName", --identrfy where this system came from
   tile = #number,--decimals accepted. For large sets, consider choosing a prefix number, then increment from it: 8000.00, 8000.01, 8000.02 ...
-  home = true,--this is a home system
+  home = false,--true, if this is a home system
   faction = nil, -- or "nameOfFactionOrAbility", --links the system to a faction or abiltiy. It will not be draftable (Muaat supernova, etc.)
   anomalies = nil, --{"asteroid field", "nebula", "supernova", "gravity rift"},
   wormholes = nil, --{"alpha", "beta", "delta", "gamma"},
@@ -974,8 +974,8 @@ local systemFormat = {
     -- 0 is top right side, when the tile is rotated at -180° on Y axis (Y rotation of zero)
   --hyperlanes = {{},{},{},{},{},{}},--connection matrix: Each inner table reperesents a side.
       --For each side, list each other side that is connected (0 indexed: {0} --> connects to the first {}side)
-      --{{2}, {}, {0}, {5}, {}, {3}} Example table:
-      --{S0,  S1, S2,  S3,  S4,  S5} S0 ({2}) says it connects to S2| S3 {5} connects to S5{3}. Each inner table can have multiple #s: {5,3,2}
+      --{{2}, {}, {0}, {5}, {}, {3, 1, 4}} Example table:
+      --{S0,  S1, S2,  S3,  S4,  S5} S0 = {2} says it connects to S2. S5 = {3, 1, 4} so it connects to S3, S1, and S4. Each inner table can have multiple #s: {5,3,2}
     --hyperlanes_faceUp/hyperlanes_faceDown also available for double-sided tiles
 
   --internal vars
